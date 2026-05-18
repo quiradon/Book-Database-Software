@@ -61,7 +61,7 @@
   "config": {
     "forge": {
       "packagerConfig": {
-        "icon": "/app/assets/icon.png",
+        "icon": "icon",
         "asar": true,
         "extraResource": [
           "app/assets"
@@ -75,8 +75,7 @@
           "name": "@electron-forge/maker-squirrel",
           "config": {
             "name": "book-db",
-            "authors": "Quiradon",
-            "setupIcon": "app/assets/icon.png"
+            "authors": "Quiradon"
           }
         },
         {
@@ -95,7 +94,7 @@
             "options": {
               "name": "book-db",
               "productDescription": "A simple book database",
-              "icon": "app/assets/icon.png"
+              "icon": "icon.png"
             }
           }
         }

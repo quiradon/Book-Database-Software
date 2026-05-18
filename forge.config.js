@@ -3,15 +3,14 @@ const path = require('path');
 module.exports = {
   packagerConfig: {
     asar: true,
-    icon: path.join(__dirname, '/app/icon.ico')
+    icon: path.join(__dirname, 'icon'),
   },
   "makers": [
     {
       "name": "@electron-forge/maker-squirrel",
       "config": {
         "name": "book-db",
-        "authors": "Quiradon",
-        "setupIcon": "app/assets/icon.png"
+        "authors": "Quiradon"
       }
     },
     {
@@ -30,7 +29,7 @@ module.exports = {
         "options": {
           "name": "book-db",
           "productDescription": "A simple book database",
-          "icon": "app/assets/icon.png"
+          "icon": path.join(__dirname, "icon.png")
         }
       }
     }
