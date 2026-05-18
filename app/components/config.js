@@ -1,34 +1,50 @@
-const config = require("../../configs.json")
+const config = require("../../configs.json");
 
-//transforme a lista de categorias em um string
-const tags_exibir = config.tags.join(", ")
-let turmas_exibir = ""
-config.turmas.forEach(turma => {
-    turmas_exibir += turma.nome + ", "
-})
+const tags_exibir = config.tags.join(", ");
+const turmas_exibir = config.turmas.map(turma => turma.nome).join(", ");
+
 module.exports = `
 <div class="col d-flex py-5 px-4" style="overflow-y: scroll;">
     <div class="flex-grow-1">
         <div class="col-md-12 col-lg-12 d-flex mb-2 border-top border-bottom border-primary p-2">
             <form class="d-inline-flex flex-column flex-grow-1 flex-fill">
-                <h3>Configurações Biblioteca</h3><label class="form-label mb-1">Categorias</label><input class="bg-primary bg-opacity-10 form-control" type="text" placeholder="Romance,Revistas,Matematica" value="${tags_exibir}" disabled/><label class="form-label mb-1">Turmas</label><input class="bg-primary bg-opacity-10 form-control mb-2" type="text" placeholder="2A,3B,4C" disabled value="${turmas_exibir}" />
+                <h3>Configurações Biblioteca</h3>
+                <label class="form-label mb-1">Categorias</label>
+                <input class="bg-primary bg-opacity-10 form-control" type="text" value="${tags_exibir}" disabled/>
+                <label class="form-label mb-1">Turmas</label>
+                <input class="bg-primary bg-opacity-10 form-control mb-2" type="text" disabled value="${turmas_exibir}" />
             </form>
         </div>
-        <div class="col-md-12 col-lg-12 d-flex border-bottom border-primary p-2">
-            <form class="d-inline-flex flex-column flex-grow-1 flex-fill">
-                <h3 class="mb-0">Gerenciar Informações</h3><label class="form-label mb-0">Livros:</label>
-                <div class="d-flex mt-1"><button onclick="alertError('Feature disponivel em uma atualização futura.')" id="save_config_atri-6"  class="btn btn-primary d-flex justify-content-xl-center align-items-xl-center me-2 align-content-center align-items-center" type="button"><svg class="me-1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="1em" height="1em" fill="currentColor">
-                            <path d="M128 64c0-35.3 28.7-64 64-64H352V128c0 17.7 14.3 32 32 32H512V448c0 35.3-28.7 64-64 64H192c-35.3 0-64-28.7-64-64V336H302.1l-39 39c-9.4 9.4-9.4 24.6 0 33.9s24.6 9.4 33.9 0l80-80c9.4-9.4 9.4-24.6 0-33.9l-80-80c-9.4-9.4-24.6-9.4-33.9 0s-9.4 24.6 0 33.9l39 39H128V64zm0 224v48H24c-13.3 0-24-10.7-24-24s10.7-24 24-24H128zM512 128H384V0L512 128z"></path>
-                        </svg>Importar</button><button onclick="window.location.href='http://localhost:5000/export/books'" id="save_config_atri-6" class="btn btn-primary d-flex justify-content-xl-center align-items-xl-center me-2 align-content-center align-items-center" type="button"><svg class="me-1" xmlns="http://www.w3.org/2000/svg" viewBox="0 -32 576 576" width="1em" height="1em" fill="currentColor">
-                            <path d="M0 64C0 28.7 28.7 0 64 0H224V128c0 17.7 14.3 32 32 32H384V288H216c-13.3 0-24 10.7-24 24s10.7 24 24 24H384V448c0 35.3-28.7 64-64 64H64c-35.3 0-64-28.7-64-64V64zM384 336V288H494.1l-39-39c-9.4-9.4-9.4-24.6 0-33.9s24.6-9.4 33.9 0l80 80c9.4 9.4 9.4 24.6 0 33.9l-80 80c-9.4 9.4-24.6 9.4-33.9 0s-9.4-24.6 0-33.9l39-39H384zm0-208H256V0L384 128z"></path>
-                        </svg>Exportar</button></div><label class="form-label mb-0">Leitores:</label>
-                <div class="d-flex mt-1"><button onclick="alertError('Feature disponivel em uma atualização futura.')" id="save_config_atri-1" class="btn btn-primary d-flex justify-content-xl-center align-items-xl-center me-2 align-content-center align-items-center" type="button"><svg class="me-1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="1em" height="1em" fill="currentColor">
-                            <path d="M128 64c0-35.3 28.7-64 64-64H352V128c0 17.7 14.3 32 32 32H512V448c0 35.3-28.7 64-64 64H192c-35.3 0-64-28.7-64-64V336H302.1l-39 39c-9.4 9.4-9.4 24.6 0 33.9s24.6 9.4 33.9 0l80-80c9.4-9.4 9.4-24.6 0-33.9l-80-80c-9.4-9.4-24.6-9.4-33.9 0s-9.4 24.6 0 33.9l39 39H128V64zm0 224v48H24c-13.3 0-24-10.7-24-24s10.7-24 24-24H128zM512 128H384V0L512 128z"></path>
-                        </svg>Importar</button><button onclick="window.location.href='http://localhost:5000/export/users'" id="save_config_atri-2" class="btn btn-primary d-flex justify-content-xl-center align-items-xl-center me-2 align-content-center align-items-center" type="button"><svg class="me-1" xmlns="http://www.w3.org/2000/svg" viewBox="0 -32 576 576" width="1em" height="1em" fill="currentColor">
-                            <path d="M0 64C0 28.7 28.7 0 64 0H224V128c0 17.7 14.3 32 32 32H384V288H216c-13.3 0-24 10.7-24 24s10.7 24 24 24H384V448c0 35.3-28.7 64-64 64H64c-35.3 0-64-28.7-64-64V64zM384 336V288H494.1l-39-39c-9.4-9.4-9.4-24.6 0-33.9s24.6-9.4 33.9 0l80 80c9.4 9.4 9.4 24.6 0 33.9l-80 80c-9.4 9.4-24.6 9.4-33.9 0s-9.4-24.6 0-33.9l39-39H384zm0-208H256V0L384 128z"></path>
-                        </svg>Exportar</button></div>
-            </form>
+        <div class="col-md-12 col-lg-12 border-bottom border-primary p-2">
+            <h3 class="mb-2">Gerenciar Informações</h3>
+            <input id="import-books-file" class="d-none" type="file" accept="application/json,.json" />
+            <input id="import-users-file" class="d-none" type="file" accept="application/json,.json" />
+
+            <div class="mb-3">
+                <label class="form-label mb-1">Livros</label>
+                <div class="d-flex flex-wrap gap-2">
+                    <button onclick="selectImportFile('books')" class="btn btn-primary" type="button">Importar JSON</button>
+                    <button onclick="window.location.href='/export/books'" class="btn btn-primary" type="button">Exportar JSON</button>
+                    <a class="btn btn-outline-primary" href="/etiquetas">Etiquetas QR</a>
+                </div>
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label mb-1">Leitores</label>
+                <div class="d-flex flex-wrap gap-2">
+                    <button onclick="selectImportFile('users')" class="btn btn-primary" type="button">Importar JSON</button>
+                    <button onclick="window.location.href='/export/users'" class="btn btn-primary" type="button">Exportar JSON</button>
+                </div>
+            </div>
+
+            <div class="mb-2">
+                <label class="form-label mb-1">Empréstimos</label>
+                <div class="d-flex flex-wrap gap-2">
+                    <a class="btn btn-outline-primary" href="/historico">Ver histórico</a>
+                    <button onclick="window.location.href='/export/loans-history'" class="btn btn-outline-primary" type="button">Exportar histórico</button>
+                </div>
+            </div>
         </div>
     </div>
 </div>
-`
+`;

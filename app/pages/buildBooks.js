@@ -1,6 +1,7 @@
 const {GenPage} = require("../buildStructure.js");
 const {page} = require("../components/booksBar.js")
 const modalDevolva = require("../components/modalDevolva.js")
+const modalConfirmDelete = require("../components/modalConfirmDelete.js")
 
 async function BooksPage () {
     let {genModalLeitores} = require("../components/modalLeitores.js")
@@ -13,6 +14,7 @@ async function BooksPage () {
     ${modal}
     ${modalLeitos}
     ${modalDevolva}
+    ${modalConfirmDelete}
     `)
 
 }

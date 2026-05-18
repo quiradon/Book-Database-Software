@@ -1,6 +1,7 @@
 const {GenPage} = require("../buildStructure.js");
 const {page} = require("../components/usersBar.js")
 const modalFinal = require("../components/modalTodosOsEmp")
+const modalConfirmDelete = require("../components/modalConfirmDelete.js")
 function requireUncached(module){
     delete require.cache[require.resolve(module)]
     return require(module)
@@ -16,6 +17,7 @@ function UsersPage () {
     `
     ${modal}
     ${modalFinal}
+    ${modalConfirmDelete}
     `)
 
 }

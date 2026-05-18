@@ -1,7 +1,8 @@
 const {GenPage} = require("../buildStructure.js");
 
 async function page() {
-  let data = await fetch('http://localhost:5000/api/status')
+  const baseUrl = process.env.KRAKEN_BOOK_BASE_URL || 'http://localhost:5000'
+  let data = await fetch(`${baseUrl}/api/status`)
     .then(response => {return response.json()})
     data = data[0]
     let version = "2.0.1"
@@ -12,6 +13,10 @@ async function page() {
             <div class="col-md-8 col-xl-6 col-xxl-10 text-center mx-auto">
                 <h2>Estatísticas do Sistema</h2>
                 <p class="w-lg-50">Números, e dados relacionados ao funcionamento do sistema. </p>
+                <div class="d-flex flex-wrap justify-content-center gap-2 mt-3">
+                    <a class="btn btn-outline-primary" href="/reports/books.pdf">PDF do acervo</a>
+                    <a class="btn btn-outline-danger" href="/reports/overdue.pdf">PDF de atrasados</a>
+                </div>
             </div>
         </div>
         <div class="row gy-2 row-cols-1 row-cols-md-2 row-cols-xl-3 d-inline-flex flex-row">

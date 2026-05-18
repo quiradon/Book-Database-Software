@@ -246,3 +246,75 @@
 .bs-icon.bs-icon-circle {
   border-radius: 50%;
 }
+
+.toolbar-surface {
+  background: rgba(5, 5, 7, .36);
+  border: 1px solid rgba(var(--bs-primary-rgb), .36);
+  border-radius: 8px;
+  padding: .75rem;
+}
+
+.filter-field {
+  min-width: 260px;
+  flex: 1 1 260px;
+}
+
+.filter-field-sm {
+  min-width: 150px;
+  flex: 0 1 170px;
+}
+
+.filter-field-md {
+  min-width: 210px;
+  flex: 0 1 240px;
+}
+
+.list-summary {
+  color: var(--bs-secondary-color);
+  font-size: .95rem;
+}
+
+.book-card-overdue {
+  border-color: rgba(var(--bs-danger-rgb), .72);
+}
+
+.late-metric {
+  min-width: 112px;
+  border-left: 1px solid rgba(var(--bs-danger-rgb), .45);
+  padding-left: 1rem;
+}
+
+.filter-state {
+  min-height: 1.75rem;
+  color: var(--bs-secondary-color);
+  font-size: .9rem;
+}
+
+.filter-state-active {
+  color: var(--bs-primary-text-emphasis);
+}
+
+.filter-disabled {
+  opacity: .58;
+}
+
+.copy-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .4rem;
+}
+
+.copy-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: .25rem;
+  border: 1px solid rgba(var(--bs-primary-rgb), .4);
+  border-radius: 6px;
+  padding: .25rem .45rem;
+  font-size: .9rem;
+}
+
+.copy-summary {
+  min-height: 1.5rem;
+  color: var(--bs-secondary-color);
+}

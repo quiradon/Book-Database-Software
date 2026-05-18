@@ -1,7 +1,8 @@
 const {GenPage} = require("../buildStructure.js");
 
 async function page() {
-  let data = await fetch('http://localhost:5000/api/status')
+  const baseUrl = process.env.KRAKEN_BOOK_BASE_URL || 'http://localhost:5000'
+  let data = await fetch(`${baseUrl}/api/status`)
     .then(response => {return response.json()})
     data = data[0]
     let version = "2.0.1"
