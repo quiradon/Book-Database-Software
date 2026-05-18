@@ -361,7 +361,7 @@ function drawLabel(
 ): void {
   const { label, libraryName, logo, qr, x, y, width, height, font, boldFont } = options;
   const padding = 5;
-  const qrSize = 48;
+  const qrSize = 56;
   const logoSize = 18;
   const textX = x + padding + qrSize + 6;
   const textWidth = width - padding * 2 - qrSize - 8;

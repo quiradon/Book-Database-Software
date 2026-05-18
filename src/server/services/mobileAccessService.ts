@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import QRCode from 'qrcode';
 
-const SESSION_TTL_MS = 2 * 60 * 60 * 1000;
+const SESSION_TTL_MS = 14 * 60 * 60 * 1000;
 const TUNNEL_URL_PATTERN = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i;
 
 export interface MobileAccessSession {

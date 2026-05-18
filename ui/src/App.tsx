@@ -30,6 +30,7 @@ import { apiFetch, apiPage, apiText, daysOverdue, formatDate, formatDateTime, qu
 import type { AppConfig, BookCopyInfo, BookInfo, CopyMovementInfo, LoanHistoryInfo, StatsRow, UserInfo } from './types';
 
 const PAGE_SIZE = 60;
+const MOBILE_TOKEN_STORAGE_KEY = 'book-db-mobile-token';
 
 interface ToastState {
   tone: 'success' | 'error';
@@ -254,6 +255,30 @@ function Spinner({ label = 'Carregando' }: { label?: string }) {
   );
 }
 
+function readStoredMobileToken(): string {
+  try {
+    return window.localStorage.getItem(MOBILE_TOKEN_STORAGE_KEY) ?? '';
+  } catch (_error) {
+    return '';
+  }
+}
+
+function writeStoredMobileToken(token: string): void {
+  try {
+    window.localStorage.setItem(MOBILE_TOKEN_STORAGE_KEY, token);
+  } catch (_error) {
+    // Storage can be blocked by browser privacy settings; the URL token still works.
+  }
+}
+
+function clearStoredMobileToken(): void {
+  try {
+    window.localStorage.removeItem(MOBILE_TOKEN_STORAGE_KEY);
+  } catch (_error) {
+    // Ignore storage failures.
+  }
+}
+
 function ListLoading({ rows = 3 }: { rows?: number }) {
   return (
     <div className="space-y-3">
@@ -471,6 +496,7 @@ function MobileAccessPage({ notify }: { notify: (tone: ToastState['tone'], text:
                   <span>Provedor: Cloudflare Quick Tunnel</span>
                   <span>Iniciado em {formatDateTime(status.startedAt)}</span>
                   <span>Expira em {formatDateTime(status.expiresAt)}</span>
+                  <span>O mesmo QR Code pode ser usado por vários celulares da equipe.</span>
                 </div>
               </div>
             ) : (
@@ -484,11 +510,13 @@ function MobileAccessPage({ notify }: { notify: (tone: ToastState['tone'], text:
 }
 
 function MobileScannerPage({ notify }: { notify: (tone: ToastState['tone'], text: string) => void }) {
-  const token = new URLSearchParams(window.location.search).get('token') ?? '';
+  const [token, setToken] = useState(() => new URLSearchParams(window.location.search).get('token') ?? readStoredMobileToken());
   const videoRef = useRef<HTMLVideoElement>(null);
   const controlsRef = useRef<ScannerControls | null>(null);
+  const scanInFlightRef = useRef(false);
   const [session, setSession] = useState<MobileSessionStatus | null>(null);
   const [validating, setValidating] = useState(true);
+  const [scannerLoading, setScannerLoading] = useState(false);
   const [scannerRunning, setScannerRunning] = useState(false);
   const [scannerError, setScannerError] = useState('');
   const [manualPayload, setManualPayload] = useState('');
@@ -512,54 +540,79 @@ function MobileScannerPage({ notify }: { notify: (tone: ToastState['tone'], text
       return;
     }
 
+    writeStoredMobileToken(token);
+
     apiFetch<MobileSessionStatus>(`/api/mobile/session?${queryString({ token })}`)
       .then(setSession)
-      .catch(() => setSession(null))
+      .catch(() => {
+        clearStoredMobileToken();
+        setToken('');
+        setSession(null);
+      })
       .finally(() => setValidating(false));
   }, [token]);
+
+  useEffect(() => {
+    if (session?.active) {
+      void import('@zxing/browser');
+    }
+  }, [session?.active]);
 
   const stopScanner = useCallback(() => {
     controlsRef.current?.stop();
     controlsRef.current = null;
     setScannerRunning(false);
+    setScannerLoading(false);
   }, []);
 
   const resolvePayload = useCallback(async (payload: string) => {
+    const normalizedPayload = payload.trim();
+    if (!normalizedPayload || scanInFlightRef.current) {
+      return;
+    }
+
     if (!token) {
       notify('error', 'Sessão mobile inválida.');
       return;
     }
 
+    scanInFlightRef.current = true;
     setResolving(true);
     try {
       const resolved = await apiFetch<BookCopyInfo>('/api/mobile/copies/resolve', {
         method: 'POST',
-        body: JSON.stringify({ token, payload }),
+        body: JSON.stringify({ token, payload: normalizedPayload }),
       });
       setCopy(resolved);
       setReaderId('');
       setReaderLabel('');
+      setManualPayload('');
       notify('success', 'Etiqueta lida.');
     } catch (error) {
       notify('error', error instanceof Error ? error.message : 'QR Code inválido.');
     } finally {
       setResolving(false);
+      scanInFlightRef.current = false;
     }
   }, [notify, token]);
 
   const startScanner = useCallback(async () => {
-    if (!videoRef.current) {
+    if (!videoRef.current || scannerRunning || scannerLoading || resolving) {
       return;
     }
 
     setScannerError('');
-    setScannerRunning(true);
+    setScannerLoading(true);
 
     try {
       const { BrowserQRCodeReader } = await import('@zxing/browser');
-      const reader = new BrowserQRCodeReader();
+      const reader = new BrowserQRCodeReader(undefined, {
+        delayBetweenScanAttempts: 80,
+        delayBetweenScanSuccess: 180,
+        tryPlayVideoTimeout: 3500,
+      });
       const onDecode = (result: ScannerResult | undefined, _error: unknown, controls: ScannerControls) => {
-        if (!result) {
+        if (!result || scanInFlightRef.current) {
           return;
         }
 
@@ -574,16 +627,22 @@ function MobileScannerPage({ notify }: { notify: (tone: ToastState['tone'], text
           audio: false,
           video: {
             facingMode: { ideal: 'environment' },
+            width: { ideal: 960 },
+            height: { ideal: 720 },
+            frameRate: { ideal: 30, max: 30 },
           },
         },
         videoRef.current,
         onDecode,
       );
+      setScannerLoading(false);
+      setScannerRunning(true);
     } catch {
+      setScannerLoading(false);
       setScannerRunning(false);
       setScannerError('Não foi possível abrir a câmera neste navegador.');
     }
-  }, [resolvePayload]);
+  }, [resolvePayload, resolving, scannerLoading, scannerRunning]);
 
   useEffect(() => stopScanner, [stopScanner]);
 
@@ -689,79 +748,118 @@ function MobileScannerPage({ notify }: { notify: (tone: ToastState['tone'], text
   }
 
   return (
-    <div className="mx-auto grid min-h-screen max-w-xl gap-4 p-4">
-      <header className="flex items-center gap-3">
+    <div className="mx-auto grid min-h-screen max-w-xl content-start gap-3 bg-[#101018] p-3 pb-6">
+      <header className="sticky top-0 z-20 -mx-3 flex items-center gap-3 border-b border-white/10 bg-[#101018]/95 px-3 py-3 backdrop-blur">
         {session.logoDataUrl ? (
           <img src={session.logoDataUrl} className="h-11 w-11 rounded-md object-cover" alt="" />
         ) : (
           <div className="grid h-11 w-11 place-items-center rounded-md bg-blue-600 font-semibold">QR</div>
         )}
-        <div>
+        <div className="min-w-0 flex-1">
           <p className="text-xs text-slate-400">Operação mobile</p>
-          <h1 className="text-lg font-semibold">{session.libraryName}</h1>
+          <h1 className="truncate text-lg font-semibold">{session.libraryName}</h1>
         </div>
+        <Badge tone={scannerRunning ? 'green' : 'slate'}>{scannerRunning ? 'Lendo' : 'Pronto'}</Badge>
       </header>
 
-      <Card className="grid gap-3">
-        <div className="overflow-hidden rounded-lg border border-white/12 bg-black">
-          <video ref={videoRef} className="aspect-[4/3] w-full object-cover" muted playsInline />
+      <section className="overflow-hidden rounded-lg border border-blue-500/40 bg-[#161621] shadow-lg">
+        <div className="relative overflow-hidden bg-black">
+          <video ref={videoRef} className="aspect-[3/4] max-h-[58vh] w-full object-cover sm:aspect-[4/3]" muted playsInline />
+          <div className="pointer-events-none absolute inset-0 grid place-items-center">
+            <div className="h-44 w-44 rounded-2xl border-2 border-blue-300/90 shadow-[0_0_0_999px_rgba(0,0,0,0.24)]" />
+          </div>
+          <div className="absolute left-3 right-3 top-3 flex items-center justify-between gap-2">
+            <span className="rounded-full bg-black/65 px-3 py-1 text-xs text-slate-100">
+              {scannerRunning ? 'Aponte para o QR da etiqueta' : scannerLoading ? 'Abrindo câmera...' : 'Câmera pronta'}
+            </span>
+            {(resolving || scannerLoading) && <span className="h-5 w-5 animate-spin rounded-full border-2 border-white/30 border-t-white" />}
+          </div>
         </div>
-        <div className="grid grid-cols-2 gap-2">
-          <Button onClick={() => void startScanner()} disabled={scannerRunning || resolving}>
-            <Camera size={16} />
-            {scannerRunning ? 'Lendo...' : 'Abrir câmera'}
-          </Button>
-          <Button variant="secondary" onClick={stopScanner} disabled={!scannerRunning}>
-            Parar
-          </Button>
-        </div>
-        {scannerError && <p className="text-sm text-rose-200">{scannerError}</p>}
-        {resolving && <Spinner label="Lendo etiqueta" />}
-        <div className="grid gap-2 border-t border-white/10 pt-3">
-          <Input value={manualPayload} onChange={(event) => setManualPayload(event.target.value)} placeholder="Código manual ou conteúdo do QR" />
-          <Button variant="secondary" onClick={() => void resolvePayload(manualPayload)} disabled={!manualPayload.trim() || resolving}>
-            Buscar etiqueta
-          </Button>
-        </div>
-      </Card>
 
-      {copy && (
-        <Card className="grid gap-4">
-          <div className="grid gap-1">
-            <div className="flex items-center justify-between gap-2">
-              <h2 className="text-lg font-semibold">{copy.titulo}</h2>
+        <div className="grid gap-3 p-3">
+          <div className="grid grid-cols-[1fr_auto] gap-2">
+            <Button className="h-11" onClick={() => void startScanner()} disabled={scannerRunning || scannerLoading || resolving}>
+              <Camera size={17} />
+              {scannerRunning ? 'Lendo etiqueta' : scannerLoading ? 'Abrindo...' : 'Escanear etiqueta'}
+            </Button>
+            <Button className="h-11 px-4" variant="secondary" onClick={stopScanner} disabled={!scannerRunning && !scannerLoading}>
+              Parar
+            </Button>
+          </div>
+
+          {scannerError && <p className="rounded-md border border-rose-500/30 bg-rose-950/40 px-3 py-2 text-sm text-rose-100">{scannerError}</p>}
+          {resolving && <Spinner label="Identificando exemplar" />}
+
+          <details className="rounded-md border border-white/10 bg-black/20 p-3">
+            <summary className="cursor-pointer text-sm font-medium text-slate-200">Digitar ID manualmente</summary>
+            <div className="mt-3 grid grid-cols-[1fr_auto] gap-2">
+              <Input
+                value={manualPayload}
+                onChange={(event) => setManualPayload(event.target.value.replace(/\D/g, ''))}
+                placeholder="ID do exemplar"
+                inputMode="numeric"
+                pattern="[0-9]*"
+              />
+              <Button variant="secondary" onClick={() => void resolvePayload(manualPayload)} disabled={!manualPayload.trim() || resolving}>
+                Buscar
+              </Button>
+            </div>
+          </details>
+        </div>
+      </section>
+
+      {copy ? (
+        <section className="grid gap-3 rounded-lg border border-white/12 bg-[#1b1b25] p-4 shadow-sm">
+          <div className="grid gap-2">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-xs uppercase text-slate-500">Exemplar {copy.codigo}</p>
+                <h2 className="text-lg font-semibold leading-tight">{copy.titulo}</h2>
+              </div>
               {copyBadge(copy)}
             </div>
-            <p className="text-sm text-slate-300">Exemplar {copy.codigo}</p>
-            <p className="text-sm text-slate-400">Autor: {copy.autor || '-'}</p>
-            {copy.emprestimo_id && (
-              <p className="text-sm text-amber-100">
-                Com {copy.leitor_nome} ({copy.leitor_turma}) até {formatDate(copy.data_prazo)}
-              </p>
-            )}
+            <div className="grid gap-1 text-sm text-slate-400">
+              <span>Autor: {copy.autor || '-'}</span>
+              <span>ISBN: {copy.isbn || '-'}</span>
+              {copy.emprestimo_id && (
+                <span className="rounded-md border border-amber-500/25 bg-amber-950/30 px-3 py-2 text-amber-100">
+                  Com {copy.leitor_nome} ({copy.leitor_turma}) até {formatDate(copy.data_prazo)}
+                </span>
+              )}
+            </div>
           </div>
 
           {copy.emprestimo_id ? (
-            <Button variant="danger" onClick={() => void returnCopy()} disabled={saving}>
+            <Button className="h-11" variant="danger" onClick={() => void returnCopy()} disabled={saving}>
               Registrar devolução
             </Button>
           ) : (
-            <div className="grid gap-3">
-              <Field label="Turma">
-                <SearchableSelect
-                  value={classFilter}
-                  selectedLabel={classFilter ? selectedClass?.nome ?? classFilter : 'Todas as turmas'}
-                  options={classOptions}
-                  onChange={(value) => {
-                    setClassFilter(value);
-                    setReaderId('');
-                    setReaderLabel('');
-                  }}
-                  onSearchChange={setClassSearch}
-                  loading={classesLoading}
-                  allowClear
-                />
-              </Field>
+            <div className="grid gap-3 rounded-md border border-blue-500/20 bg-black/15 p-3">
+              <div className="grid grid-cols-[1fr_104px] gap-2">
+                <Field label="Turma">
+                  <SearchableSelect
+                    value={classFilter}
+                    selectedLabel={classFilter ? selectedClass?.nome ?? classFilter : 'Todas as turmas'}
+                    options={classOptions}
+                    onChange={(value) => {
+                      setClassFilter(value);
+                      setReaderId('');
+                      setReaderLabel('');
+                    }}
+                    onSearchChange={setClassSearch}
+                    loading={classesLoading}
+                    allowClear
+                  />
+                </Field>
+                <Field label="Prazo">
+                  <Select value={days} onChange={(event) => setDays(event.target.value)}>
+                    <option value="7">7 dias</option>
+                    <option value="15">15 dias</option>
+                    <option value="30">30 dias</option>
+                    <option value="45">45 dias</option>
+                  </Select>
+                </Field>
+              </div>
               <Field label="Leitor">
                 <SearchableSelect
                   value={readerId}
@@ -777,32 +875,31 @@ function MobileScannerPage({ notify }: { notify: (tone: ToastState['tone'], text
                   loading={usersLoading}
                 />
               </Field>
-              <Field label="Prazo">
-                <Select value={days} onChange={(event) => setDays(event.target.value)}>
-                  <option value="7">7 dias</option>
-                  <option value="15">15 dias</option>
-                  <option value="30">30 dias</option>
-                  <option value="45">45 dias</option>
-                </Select>
-              </Field>
-              <Button onClick={() => void loanCopy()} disabled={saving || !readerId}>
+              <Button className="h-11" onClick={() => void loanCopy()} disabled={saving || !readerId}>
                 Registrar empréstimo
               </Button>
             </div>
           )}
 
           <Button
+            className="h-10"
             variant="ghost"
             onClick={() => {
               setCopy(null);
               setManualPayload('');
               setReaderId('');
               setReaderLabel('');
+              void startScanner();
             }}
           >
-            Ler outro QR Code
+            <Camera size={16} />
+            Ler próximo exemplar
           </Button>
-        </Card>
+        </section>
+      ) : (
+        <div className="rounded-lg border border-dashed border-white/14 bg-white/[0.03] p-4 text-center text-sm text-slate-400">
+          Escaneie uma etiqueta para ver o exemplar e registrar empréstimo ou devolução.
+        </div>
       )}
     </div>
   );
