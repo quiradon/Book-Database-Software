@@ -2,8 +2,11 @@ import {
   Archive,
   BarChart3,
   BookOpen,
+  Camera,
   CheckCircle2,
   Clock,
+  Copy,
+  ExternalLink,
   FileDown,
   History,
   Library,
@@ -15,11 +18,12 @@ import {
   RefreshCw,
   Search,
   Settings,
+  Smartphone,
   Tags,
   Trash2,
   Users,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ActionItem, ActionMenu, Badge, Button, Card, Input, LinkButton, Modal, SearchableSelect, Select } from './ui';
 import type { SearchableSelectOption } from './ui';
 import { apiFetch, apiPage, apiText, daysOverdue, formatDate, formatDateTime, queryString } from './lib';
@@ -45,6 +49,29 @@ interface UserFormState {
   nome: string;
   contato: string;
   turma: string;
+}
+
+interface MobileAccessStatus {
+  active: boolean;
+  provider: 'cloudflared';
+  publicUrl: string | null;
+  mobileUrl: string | null;
+  qrCodeDataUrl: string | null;
+  startedAt: number | null;
+  expiresAt: number | null;
+}
+
+interface MobileSessionStatus extends MobileAccessStatus {
+  libraryName: string;
+  logoDataUrl: string;
+}
+
+interface ScannerControls {
+  stop: () => void;
+}
+
+interface ScannerResult {
+  getText: () => string;
 }
 
 function emptyBookForm(config?: AppConfig): BookFormState {
@@ -83,6 +110,9 @@ export function App() {
   }, [notify]);
 
   const page = useMemo(() => {
+    if (route === '/mobile') {
+      return <MobileScannerPage notify={notify} />;
+    }
     if (route === '/leitores') {
       return <UsersPage config={config} notify={notify} />;
     }
@@ -95,6 +125,9 @@ export function App() {
     if (route === '/etiquetas') {
       return <LabelsPage config={config} notify={notify} />;
     }
+    if (route === '/mobile-access') {
+      return <MobileAccessPage notify={notify} />;
+    }
     if (route === '/historico' || route.startsWith('/historico/livro/')) {
       return <HistoryPage notify={notify} />;
     }
@@ -103,6 +136,25 @@ export function App() {
     }
     return <BooksPage overdueMode={route === '/atrasados'} config={config} notify={notify} />;
   }, [config, notify, route]);
+
+  if (route === '/mobile') {
+    return (
+      <div className="min-h-screen bg-[#101018] text-slate-100">
+        {toast && (
+          <div
+            className={`fixed bottom-4 left-4 right-4 z-[80] rounded-lg border px-4 py-3 text-sm shadow-xl ${
+              toast.tone === 'success'
+                ? 'border-emerald-500/50 bg-emerald-950 text-emerald-100'
+                : 'border-rose-500/50 bg-rose-950 text-rose-100'
+            }`}
+          >
+            {toast.text}
+          </div>
+        )}
+        {page}
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#15151d] text-slate-100">
@@ -132,6 +184,7 @@ function Sidebar({ activeRoute }: { activeRoute: string }) {
     { href: '/leitores', label: 'Leitores', icon: Users, active: activeRoute === '/leitores' },
     { href: '/config', label: 'Configurações', icon: Settings, active: activeRoute === '/config' },
     { href: '/status', label: 'Estatísticas', icon: BarChart3, active: activeRoute === '/status' },
+    { href: '/mobile-access', label: 'Acesso Mobile', icon: Smartphone, active: activeRoute === '/mobile-access' },
   ];
 
   return (
@@ -293,6 +346,465 @@ function ClassCombobox({
       disabled={disabled}
       allowClear={includeAll}
     />
+  );
+}
+
+function MobileAccessPage({ notify }: { notify: (tone: ToastState['tone'], text: string) => void }) {
+  const [status, setStatus] = useState<MobileAccessStatus | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const loadStatus = useCallback(() => {
+    apiFetch<MobileAccessStatus>('/api/mobile/access')
+      .then(setStatus)
+      .catch(() => notify('error', 'Erro ao carregar acesso mobile.'));
+  }, [notify]);
+
+  useEffect(() => {
+    loadStatus();
+    const interval = window.setInterval(loadStatus, 8000);
+    return () => window.clearInterval(interval);
+  }, [loadStatus]);
+
+  const start = async () => {
+    setLoading(true);
+    try {
+      const nextStatus = await apiFetch<MobileAccessStatus>('/api/mobile/access/start', { method: 'POST' });
+      setStatus(nextStatus);
+      notify('success', 'Acesso mobile iniciado.');
+    } catch (error) {
+      notify('error', error instanceof Error ? error.message : 'Erro ao iniciar túnel mobile.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const stop = async () => {
+    setLoading(true);
+    try {
+      const nextStatus = await apiFetch<MobileAccessStatus>('/api/mobile/access/stop', { method: 'POST' });
+      setStatus(nextStatus);
+      notify('success', 'Acesso mobile encerrado.');
+    } catch {
+      notify('error', 'Erro ao encerrar acesso mobile.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const copyLink = async () => {
+    if (!status?.mobileUrl) {
+      return;
+    }
+
+    await navigator.clipboard.writeText(status.mobileUrl);
+    notify('success', 'Link copiado.');
+  };
+
+  return (
+    <div className="grid gap-4">
+      <PageToolbar>
+        <div className="min-w-64 flex-1">
+          <p className="text-sm text-slate-400">Túnel temporário para operação pelo celular</p>
+          <h1 className="text-xl font-semibold">Acesso Mobile</h1>
+        </div>
+        {status?.active ? (
+          <Button variant="danger" onClick={() => void stop()} disabled={loading}>
+            Encerrar acesso
+          </Button>
+        ) : (
+          <Button onClick={() => void start()} disabled={loading}>
+            <Smartphone size={16} />
+            Iniciar acesso
+          </Button>
+        )}
+      </PageToolbar>
+
+      <div className="grid gap-4 lg:grid-cols-[360px_1fr]">
+        <Card className="grid place-items-center gap-3">
+          {loading ? (
+            <div className="grid h-72 place-items-center">
+              <Spinner label="Preparando túnel" />
+            </div>
+          ) : status?.active && status.qrCodeDataUrl ? (
+            <>
+              <img src={status.qrCodeDataUrl} className="h-72 w-72 rounded-md bg-white p-3" alt="QR Code do acesso mobile" />
+              <Badge tone="green">Ativo</Badge>
+            </>
+          ) : (
+            <div className="grid h-72 place-items-center text-center text-slate-400">
+              <div>
+                <Smartphone className="mx-auto mb-3 text-blue-200" size={42} />
+                <p>Nenhum acesso mobile ativo.</p>
+              </div>
+            </div>
+          )}
+        </Card>
+
+        <Card>
+          <div className="grid gap-4">
+            <div>
+              <h2 className="text-lg font-semibold">Sessão temporária</h2>
+              <p className="mt-1 text-sm text-slate-400">
+                O QR Code abre uma tela mobile limitada para ler etiquetas, emprestar exemplares e registrar devoluções.
+              </p>
+            </div>
+
+            {status?.active ? (
+              <div className="grid gap-3">
+                <div className="rounded-md border border-white/12 bg-black/20 p-3">
+                  <p className="text-xs uppercase text-slate-500">Link público</p>
+                  <a className="break-all text-sm text-blue-200 hover:text-blue-100" href={status.mobileUrl ?? '#'} target="_blank" rel="noreferrer">
+                    {status.mobileUrl}
+                  </a>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="secondary" onClick={() => void copyLink()}>
+                    <Copy size={16} />
+                    Copiar link
+                  </Button>
+                  <LinkButton href={status.mobileUrl ?? '#'} target="_blank" rel="noreferrer">
+                    <ExternalLink size={16} />
+                    Abrir
+                  </LinkButton>
+                </div>
+                <div className="grid gap-1 text-sm text-slate-300">
+                  <span>Provedor: Cloudflare Quick Tunnel</span>
+                  <span>Iniciado em {formatDateTime(status.startedAt)}</span>
+                  <span>Expira em {formatDateTime(status.expiresAt)}</span>
+                </div>
+              </div>
+            ) : (
+              <EmptyState title="Acesso desligado" detail="Inicie uma sessão para gerar o QR Code que será escaneado pelo celular." />
+            )}
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function MobileScannerPage({ notify }: { notify: (tone: ToastState['tone'], text: string) => void }) {
+  const token = new URLSearchParams(window.location.search).get('token') ?? '';
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const controlsRef = useRef<ScannerControls | null>(null);
+  const [session, setSession] = useState<MobileSessionStatus | null>(null);
+  const [validating, setValidating] = useState(true);
+  const [scannerRunning, setScannerRunning] = useState(false);
+  const [scannerError, setScannerError] = useState('');
+  const [manualPayload, setManualPayload] = useState('');
+  const [copy, setCopy] = useState<BookCopyInfo | null>(null);
+  const [resolving, setResolving] = useState(false);
+  const [classSearch, setClassSearch] = useState('');
+  const [classes, setClasses] = useState<AppConfig['turmas']>([]);
+  const [classesLoading, setClassesLoading] = useState(false);
+  const [classFilter, setClassFilter] = useState('');
+  const [userSearch, setUserSearch] = useState('');
+  const [users, setUsers] = useState<UserInfo[]>([]);
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [readerId, setReaderId] = useState('');
+  const [readerLabel, setReaderLabel] = useState('');
+  const [days, setDays] = useState('15');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!token) {
+      setValidating(false);
+      return;
+    }
+
+    apiFetch<MobileSessionStatus>(`/api/mobile/session?${queryString({ token })}`)
+      .then(setSession)
+      .catch(() => setSession(null))
+      .finally(() => setValidating(false));
+  }, [token]);
+
+  const stopScanner = useCallback(() => {
+    controlsRef.current?.stop();
+    controlsRef.current = null;
+    setScannerRunning(false);
+  }, []);
+
+  const resolvePayload = useCallback(async (payload: string) => {
+    if (!token) {
+      notify('error', 'Sessão mobile inválida.');
+      return;
+    }
+
+    setResolving(true);
+    try {
+      const resolved = await apiFetch<BookCopyInfo>('/api/mobile/copies/resolve', {
+        method: 'POST',
+        body: JSON.stringify({ token, payload }),
+      });
+      setCopy(resolved);
+      setReaderId('');
+      setReaderLabel('');
+      notify('success', 'Etiqueta lida.');
+    } catch (error) {
+      notify('error', error instanceof Error ? error.message : 'QR Code inválido.');
+    } finally {
+      setResolving(false);
+    }
+  }, [notify, token]);
+
+  const startScanner = useCallback(async () => {
+    if (!videoRef.current) {
+      return;
+    }
+
+    setScannerError('');
+    setScannerRunning(true);
+
+    try {
+      const { BrowserQRCodeReader } = await import('@zxing/browser');
+      const reader = new BrowserQRCodeReader();
+      const onDecode = (result: ScannerResult | undefined, _error: unknown, controls: ScannerControls) => {
+        if (!result) {
+          return;
+        }
+
+        controls.stop();
+        controlsRef.current = null;
+        setScannerRunning(false);
+        void resolvePayload(result.getText());
+      };
+
+      controlsRef.current = await reader.decodeFromConstraints(
+        {
+          audio: false,
+          video: {
+            facingMode: { ideal: 'environment' },
+          },
+        },
+        videoRef.current,
+        onDecode,
+      );
+    } catch {
+      setScannerRunning(false);
+      setScannerError('Não foi possível abrir a câmera neste navegador.');
+    }
+  }, [resolvePayload]);
+
+  useEffect(() => stopScanner, [stopScanner]);
+
+  useEffect(() => {
+    if (!token) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      setClassesLoading(true);
+      apiFetch<AppConfig['turmas']>(`/api/mobile/classes?${queryString({ token, search: classSearch.trim(), limit: 30 })}`)
+        .then(setClasses)
+        .catch(() => setClasses([]))
+        .finally(() => setClassesLoading(false));
+    }, 180);
+
+    return () => window.clearTimeout(timeout);
+  }, [classSearch, token]);
+
+  useEffect(() => {
+    if (!token || !copy || copy.emprestimo_id) {
+      setUsers([]);
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      setUsersLoading(true);
+      apiFetch<UserInfo[]>(`/api/mobile/users?${queryString({ token, search: userSearch.trim(), turma: classFilter, limit: 20 })}`)
+        .then(setUsers)
+        .catch(() => setUsers([]))
+        .finally(() => setUsersLoading(false));
+    }, 220);
+
+    return () => window.clearTimeout(timeout);
+  }, [classFilter, copy, token, userSearch]);
+
+  const classOptions = useMemo<SearchableSelectOption[]>(() => [
+    { value: '', label: 'Todas as turmas', description: 'Sem filtro' },
+    ...classes.map((item) => ({ value: item.value, label: item.nome, description: item.value })),
+  ], [classes]);
+  const selectedClass = classes.find((item) => item.value === classFilter);
+  const userOptions = users.map((user) => ({
+    value: String(user.id),
+    label: user.nome,
+    description: `${user.turma} | ${user.emprestimos} empréstimo(s)`,
+  }));
+
+  const returnCopy = async () => {
+    if (!copy) {
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const updated = await apiFetch<BookCopyInfo>(`/api/mobile/copies/${copy.id}/return`, {
+        method: 'POST',
+        body: JSON.stringify({ token }),
+      });
+      setCopy(updated);
+      notify('success', 'Devolução registrada.');
+    } catch (error) {
+      notify('error', error instanceof Error ? error.message : 'Erro ao devolver exemplar.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const loanCopy = async () => {
+    if (!copy || !readerId) {
+      notify('error', 'Selecione um leitor.');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const updated = await apiFetch<BookCopyInfo>(`/api/mobile/copies/${copy.id}/loan`, {
+        method: 'POST',
+        body: JSON.stringify({ token, leitor_id: Number(readerId), dias: Number(days) }),
+      });
+      setCopy(updated);
+      notify('success', 'Empréstimo registrado.');
+    } catch (error) {
+      notify('error', error instanceof Error ? error.message : 'Erro ao emprestar exemplar.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (validating) {
+    return <div className="grid min-h-screen place-items-center p-4"><Spinner label="Validando sessão" /></div>;
+  }
+
+  if (!token || !session?.active) {
+    return (
+      <div className="grid min-h-screen place-items-center p-4">
+        <Card className="max-w-md text-center">
+          <Smartphone className="mx-auto mb-3 text-rose-200" size={42} />
+          <h1 className="text-xl font-semibold">Sessão indisponível</h1>
+          <p className="mt-2 text-sm text-slate-400">Gere um novo QR Code na tela de Acesso Mobile do computador.</p>
+        </Card>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mx-auto grid min-h-screen max-w-xl gap-4 p-4">
+      <header className="flex items-center gap-3">
+        {session.logoDataUrl ? (
+          <img src={session.logoDataUrl} className="h-11 w-11 rounded-md object-cover" alt="" />
+        ) : (
+          <div className="grid h-11 w-11 place-items-center rounded-md bg-blue-600 font-semibold">QR</div>
+        )}
+        <div>
+          <p className="text-xs text-slate-400">Operação mobile</p>
+          <h1 className="text-lg font-semibold">{session.libraryName}</h1>
+        </div>
+      </header>
+
+      <Card className="grid gap-3">
+        <div className="overflow-hidden rounded-lg border border-white/12 bg-black">
+          <video ref={videoRef} className="aspect-[4/3] w-full object-cover" muted playsInline />
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <Button onClick={() => void startScanner()} disabled={scannerRunning || resolving}>
+            <Camera size={16} />
+            {scannerRunning ? 'Lendo...' : 'Abrir câmera'}
+          </Button>
+          <Button variant="secondary" onClick={stopScanner} disabled={!scannerRunning}>
+            Parar
+          </Button>
+        </div>
+        {scannerError && <p className="text-sm text-rose-200">{scannerError}</p>}
+        {resolving && <Spinner label="Lendo etiqueta" />}
+        <div className="grid gap-2 border-t border-white/10 pt-3">
+          <Input value={manualPayload} onChange={(event) => setManualPayload(event.target.value)} placeholder="Código manual ou conteúdo do QR" />
+          <Button variant="secondary" onClick={() => void resolvePayload(manualPayload)} disabled={!manualPayload.trim() || resolving}>
+            Buscar etiqueta
+          </Button>
+        </div>
+      </Card>
+
+      {copy && (
+        <Card className="grid gap-4">
+          <div className="grid gap-1">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-lg font-semibold">{copy.titulo}</h2>
+              {copyBadge(copy)}
+            </div>
+            <p className="text-sm text-slate-300">Exemplar {copy.codigo}</p>
+            <p className="text-sm text-slate-400">Autor: {copy.autor || '-'}</p>
+            {copy.emprestimo_id && (
+              <p className="text-sm text-amber-100">
+                Com {copy.leitor_nome} ({copy.leitor_turma}) até {formatDate(copy.data_prazo)}
+              </p>
+            )}
+          </div>
+
+          {copy.emprestimo_id ? (
+            <Button variant="danger" onClick={() => void returnCopy()} disabled={saving}>
+              Registrar devolução
+            </Button>
+          ) : (
+            <div className="grid gap-3">
+              <Field label="Turma">
+                <SearchableSelect
+                  value={classFilter}
+                  selectedLabel={classFilter ? selectedClass?.nome ?? classFilter : 'Todas as turmas'}
+                  options={classOptions}
+                  onChange={(value) => {
+                    setClassFilter(value);
+                    setReaderId('');
+                    setReaderLabel('');
+                  }}
+                  onSearchChange={setClassSearch}
+                  loading={classesLoading}
+                  allowClear
+                />
+              </Field>
+              <Field label="Leitor">
+                <SearchableSelect
+                  value={readerId}
+                  selectedLabel={readerLabel}
+                  options={userOptions}
+                  onChange={(value, option) => {
+                    setReaderId(value);
+                    setReaderLabel(option?.label ?? '');
+                  }}
+                  onSearchChange={setUserSearch}
+                  placeholder="Buscar aluno"
+                  emptyText="Nenhum aluno encontrado."
+                  loading={usersLoading}
+                />
+              </Field>
+              <Field label="Prazo">
+                <Select value={days} onChange={(event) => setDays(event.target.value)}>
+                  <option value="7">7 dias</option>
+                  <option value="15">15 dias</option>
+                  <option value="30">30 dias</option>
+                  <option value="45">45 dias</option>
+                </Select>
+              </Field>
+              <Button onClick={() => void loanCopy()} disabled={saving || !readerId}>
+                Registrar empréstimo
+              </Button>
+            </div>
+          )}
+
+          <Button
+            variant="ghost"
+            onClick={() => {
+              setCopy(null);
+              setManualPayload('');
+              setReaderId('');
+              setReaderLabel('');
+            }}
+          >
+            Ler outro QR Code
+          </Button>
+        </Card>
+      )}
+    </div>
   );
 }
 

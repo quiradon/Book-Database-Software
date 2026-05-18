@@ -9,6 +9,7 @@ import { UsersRepository } from './repositories/usersRepository';
 import { registerApiRoutes, registerErrorHandler } from './routes/apiRoutes';
 import { registerPageRoutes } from './routes/pageRoutes';
 import { LibraryService } from './services/libraryService';
+import { MobileAccessService } from './services/mobileAccessService';
 
 export interface StartServerOptions {
   port: number;
@@ -32,11 +33,20 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
   const getConfig = () => loadConfig(options.projectRoot);
   const setConfig = (input: Parameters<typeof saveConfig>[1]) => saveConfig(options.projectRoot, input);
   const library = new LibraryService(db, books, users, getConfig);
+  const mobileAccess = new MobileAccessService(options.port);
 
   const app = express();
 
   app.disable('x-powered-by');
   app.use(express.json({ limit: '5mb' }));
+  app.use((request, response, next) => {
+    if (!mobileAccess.isTunnelHost(request.headers.host) || mobileAccess.isAllowedTunnelPath(request.path)) {
+      next();
+      return;
+    }
+
+    response.status(404).send('Acesso indisponivel pelo link mobile.');
+  });
   app.use('/assets', express.static(path.join(options.appRoot, 'assets'), { maxAge: '1h' }));
   app.use('/functions', express.static(path.join(options.appRoot, 'functions'), { maxAge: '1h' }));
   app.use('/ui', express.static(path.join(options.appRoot, 'ui'), { maxAge: '1h' }));
@@ -46,6 +56,7 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
     users,
     stats,
     library,
+    mobileAccess,
     getConfig,
     setConfig,
   });
@@ -67,6 +78,7 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
           resolve();
         });
       });
+      await mobileAccess.stop();
       await db.close();
     },
   };

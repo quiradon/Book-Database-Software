@@ -24,6 +24,8 @@ export function registerPageRoutes(app: Express, options: PageRouteOptions): voi
   app.get('/historico/livro/:bookId', serveSpa);
   app.get('/livros/:bookId', serveSpa);
   app.get('/etiquetas', serveSpa);
+  app.get('/mobile', serveSpa);
+  app.get('/mobile-access', serveSpa);
 
   app.get('/donate', pageRoute(async (_request: Request, response: Response) => {
     response.redirect('/');

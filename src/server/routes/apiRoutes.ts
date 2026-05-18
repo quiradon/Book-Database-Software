@@ -10,12 +10,14 @@ import { buildBooksPdfReport, buildLabelsPdfReport, buildOverduePdfReport } from
 import { normalizeSearchTerm } from '../search';
 import { lookupBookByIsbn } from '../services/isbnService';
 import { LibraryService } from '../services/libraryService';
+import { MobileAccessService } from '../services/mobileAccessService';
 
 interface ApiDependencies {
   books: BooksRepository;
   users: UsersRepository;
   stats: StatsRepository;
   library: LibraryService;
+  mobileAccess: MobileAccessService;
   getConfig: () => AppConfig;
   setConfig: (input: Partial<AppConfig>) => AppConfig;
 }
@@ -255,6 +257,124 @@ export function registerApiRoutes(app: Express, dependencies: ApiDependencies): 
     response.json(dependencies.getConfig());
   });
 
+  router.get('/mobile/access', (request, response) => {
+    assertDesktopMobileControl(request, dependencies.mobileAccess);
+    response.json(dependencies.mobileAccess.status());
+  });
+
+  router.post(
+    '/mobile/access/start',
+    asyncRoute(async (request, response) => {
+      assertDesktopMobileControl(request, dependencies.mobileAccess);
+      await dependencies.mobileAccess.start();
+      response.json(dependencies.mobileAccess.status());
+    }),
+  );
+
+  router.post(
+    '/mobile/access/stop',
+    asyncRoute(async (request, response) => {
+      assertDesktopMobileControl(request, dependencies.mobileAccess);
+      await dependencies.mobileAccess.stop();
+      response.json(dependencies.mobileAccess.status());
+    }),
+  );
+
+  router.get('/mobile/session', (request, response) => {
+    assertMobileToken(request, dependencies.mobileAccess);
+    const config = dependencies.getConfig();
+    response.json({
+      ...dependencies.mobileAccess.status(),
+      libraryName: config.library_name,
+      logoDataUrl: config.logo_data_url,
+    });
+  });
+
+  router.get(
+    '/mobile/classes',
+    asyncRoute(async (request, response) => {
+      assertMobileToken(request, dependencies.mobileAccess);
+      const search = normalizeSearchTerm(singleQueryValue(request.query.search) ?? '');
+      const limit = classLimit(request.query.limit);
+      const classes = dependencies.getConfig().turmas
+        .filter((classItem) => {
+          if (!search) {
+            return true;
+          }
+
+          return normalizeSearchTerm(`${classItem.nome} ${classItem.value}`).includes(search);
+        })
+        .slice(0, limit);
+
+      response.json(classes);
+    }),
+  );
+
+  router.get(
+    '/mobile/users',
+    asyncRoute(async (request, response) => {
+      assertMobileToken(request, dependencies.mobileAccess);
+      const limit = pageLimit(request.query.limit);
+      const result = await dependencies.users.list({
+        search: singleQueryValue(request.query.search),
+        turma: singleQueryValue(request.query.turma),
+        limit,
+        offset: 0,
+      });
+
+      response.json(result.rows);
+    }),
+  );
+
+  router.post(
+    '/mobile/copies/resolve',
+    asyncRoute(async (request, response) => {
+      assertMobileToken(request, dependencies.mobileAccess);
+      const copy = await dependencies.books.getCopyById(parseMobileCopyId(request.body));
+
+      if (!copy) {
+        throw new AppError(404, 'Exemplar nao encontrado');
+      }
+
+      response.json(copy);
+    }),
+  );
+
+  router.post(
+    '/mobile/copies/:id/return',
+    asyncRoute(async (request, response) => {
+      assertMobileToken(request, dependencies.mobileAccess);
+      const copyId = parseId(request.params.id);
+      await dependencies.library.returnCopy(copyId);
+      response.json(await requireCopy(dependencies.books, copyId));
+    }),
+  );
+
+  router.post(
+    '/mobile/copies/:id/loan',
+    asyncRoute(async (request, response) => {
+      assertMobileToken(request, dependencies.mobileAccess);
+      const copy = await requireCopy(dependencies.books, parseId(request.params.id));
+      const leitorId = parsePositiveInteger((request.body as { leitor_id?: unknown }).leitor_id);
+
+      if (!leitorId) {
+        throw new AppError(400, 'Leitor invalido');
+      }
+
+      const days = loanDays((request.body as { dias?: unknown }).dias);
+      const now = Date.now();
+      await dependencies.library.loanBook({
+        livro_id: copy.livro_id,
+        exemplar_id: copy.id,
+        leitor_id: leitorId,
+        data_emprestimo: now,
+        data_prazo: now + days * 24 * 60 * 60 * 1000,
+      });
+
+      response.json(await requireCopy(dependencies.books, copy.id));
+    }),
+  );
+
   router.get(
     '/classes',
     asyncRoute(async (request, response) => {
@@ -435,6 +555,106 @@ function parseIdList(value: string | undefined): number[] {
     .split(',')
     .map((item) => Number(item.trim()))
     .filter((item) => Number.isInteger(item) && item > 0);
+}
+
+function assertDesktopMobileControl(request: Request, mobileAccess: MobileAccessService): void {
+  if (mobileAccess.isTunnelHost(request.headers.host)) {
+    throw new AppError(403, 'Controle mobile disponivel apenas no desktop');
+  }
+}
+
+function assertMobileToken(request: Request, mobileAccess: MobileAccessService): void {
+  if (!mobileAccess.validateToken(mobileToken(request))) {
+    throw new AppError(401, 'Sessao mobile invalida ou expirada');
+  }
+}
+
+function mobileToken(request: Request): string | undefined {
+  const authorization = request.header('authorization');
+  if (authorization?.toLowerCase().startsWith('bearer ')) {
+    return authorization.slice(7).trim();
+  }
+
+  const headerToken = request.header('x-mobile-token');
+  if (headerToken) {
+    return headerToken;
+  }
+
+  const queryToken = singleQueryValue(request.query.token);
+  if (queryToken) {
+    return queryToken;
+  }
+
+  const body = request.body as { token?: unknown } | undefined;
+  return typeof body?.token === 'string' ? body.token : undefined;
+}
+
+function parseMobileCopyId(body: unknown): number {
+  if (!body || typeof body !== 'object') {
+    throw new AppError(400, 'QR Code invalido');
+  }
+
+  const input = body as { copyId?: unknown; copy_id?: unknown; payload?: unknown };
+  const direct = parsePositiveInteger(input.copyId ?? input.copy_id);
+  if (direct) {
+    return direct;
+  }
+
+  if (typeof input.payload !== 'string') {
+    throw new AppError(400, 'QR Code invalido');
+  }
+
+  const payload = input.payload.trim();
+  const numericPayload = parsePositiveInteger(payload);
+  if (numericPayload) {
+    return numericPayload;
+  }
+
+  try {
+    const parsed = JSON.parse(payload) as { type?: unknown; copyId?: unknown; copy_id?: unknown; id?: unknown };
+    const parsedId = parsePositiveInteger(parsed.copyId ?? parsed.copy_id ?? parsed.id);
+    if (parsedId && (!parsed.type || parsed.type === 'book-copy')) {
+      return parsedId;
+    }
+  } catch (_error) {
+    // Some scanner apps can return URLs. Try URL parsing below.
+  }
+
+  try {
+    const url = new URL(payload);
+    const urlId = parsePositiveInteger(url.searchParams.get('copyId') ?? url.searchParams.get('copy_id'));
+    if (urlId) {
+      return urlId;
+    }
+  } catch (_error) {
+    throw new AppError(400, 'QR Code invalido');
+  }
+
+  throw new AppError(400, 'QR Code invalido');
+}
+
+function parsePositiveInteger(value: unknown): number | null {
+  const numberValue = Number(value);
+  return Number.isInteger(numberValue) && numberValue > 0 ? numberValue : null;
+}
+
+async function requireCopy(books: BooksRepository, copyId: number): Promise<BookLabelInfo> {
+  const copy = await books.getCopyById(copyId);
+
+  if (!copy) {
+    throw new AppError(404, 'Exemplar nao encontrado');
+  }
+
+  return copy;
+}
+
+function loanDays(value: unknown): number {
+  const parsed = parsePositiveInteger(value);
+  if (!parsed) {
+    return 15;
+  }
+
+  return Math.min(parsed, 90);
 }
 
 function pageLimit(value: unknown): number {

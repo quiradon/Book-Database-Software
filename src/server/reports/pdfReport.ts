@@ -438,7 +438,7 @@ function drawLabel(
   lineY = Math.max(y + 9, lineY - 2);
   for (const item of meta) {
     page.drawText(item, {
-      x: x + padding,
+      x: textX,
       y: lineY,
       size: 6.2,
       font,
@@ -449,14 +449,7 @@ function drawLabel(
 }
 
 function buildBookQrPayload(copy: BookLabelInfo): string {
-  return JSON.stringify({
-    type: 'book-copy',
-    bookId: copy.livro_id,
-    copyId: copy.id,
-    code: copy.codigo,
-    isbn: copy.isbn || '',
-    title: copy.titulo,
-  });
+  return String(copy.id);
 }
 
 function dataUrlToBytes(value: string): Uint8Array {
