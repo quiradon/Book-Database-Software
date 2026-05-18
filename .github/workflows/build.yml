@@ -8,6 +8,9 @@ on:
 permissions:
   contents: read
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     name: Build ${{ matrix.label }}
@@ -17,10 +20,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
+          - os: windows-2022
             label: Windows
             artifact_name: book-db-windows
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             label: Linux
             artifact_name: book-db-linux
 
@@ -31,8 +34,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
+          cache-dependency-path: package-lock.json
 
       - name: Install Linux packaging dependencies
         if: runner.os == 'Linux'
