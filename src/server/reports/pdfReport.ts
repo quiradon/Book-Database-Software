@@ -316,9 +316,9 @@ function normalizeTimestamp(value: string | number | null): number | null {
 
 async function embedQrCode(pdf: PDFDocument, label: BookLabelInfo) {
   const dataUrl = await QRCode.toDataURL(buildBookQrPayload(label), {
-    errorCorrectionLevel: 'M',
-    margin: 1,
-    width: 180,
+    errorCorrectionLevel: 'L',
+    margin: 2,
+    width: 240,
   });
   return pdf.embedPng(dataUrlToBytes(dataUrl));
 }
@@ -361,7 +361,7 @@ function drawLabel(
 ): void {
   const { label, libraryName, logo, qr, x, y, width, height, font, boldFont } = options;
   const padding = 5;
-  const qrSize = 56;
+  const qrSize = 60;
   const logoSize = 18;
   const textX = x + padding + qrSize + 6;
   const textWidth = width - padding * 2 - qrSize - 8;

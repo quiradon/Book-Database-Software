@@ -75,6 +75,15 @@ interface ScannerResult {
   getText: () => string;
 }
 
+interface NativeBarcodeDetector {
+  detect: (source: HTMLVideoElement) => Promise<Array<{ rawValue?: string }>>;
+}
+
+interface NativeBarcodeDetectorConstructor {
+  new (options: { formats: string[] }): NativeBarcodeDetector;
+  getSupportedFormats?: () => Promise<string[]>;
+}
+
 function emptyBookForm(config?: AppConfig): BookFormState {
   return {
     titulo: '',
@@ -277,6 +286,72 @@ function clearStoredMobileToken(): void {
   } catch (_error) {
     // Ignore storage failures.
   }
+}
+
+async function startNativeQrScanner(
+  video: HTMLVideoElement,
+  onResult: (value: string) => void,
+): Promise<ScannerControls | null> {
+  const BarcodeDetector = (window as typeof window & { BarcodeDetector?: NativeBarcodeDetectorConstructor }).BarcodeDetector;
+  if (!BarcodeDetector || !navigator.mediaDevices?.getUserMedia) {
+    return null;
+  }
+
+  const supportedFormats = BarcodeDetector.getSupportedFormats ? await BarcodeDetector.getSupportedFormats() : ['qr_code'];
+  if (!supportedFormats.includes('qr_code')) {
+    return null;
+  }
+
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: false,
+    video: {
+      facingMode: { ideal: 'environment' },
+      width: { ideal: 1280 },
+      height: { ideal: 720 },
+      frameRate: { ideal: 30, max: 30 },
+    },
+  });
+  const detector = new BarcodeDetector({ formats: ['qr_code'] });
+  let stopped = false;
+  let timeoutId = 0;
+
+  video.srcObject = stream;
+  video.muted = true;
+  video.playsInline = true;
+  await video.play();
+
+  const stop = () => {
+    stopped = true;
+    window.clearTimeout(timeoutId);
+    stream.getTracks().forEach((track) => track.stop());
+    video.srcObject = null;
+  };
+
+  const scan = async () => {
+    if (stopped) {
+      return;
+    }
+
+    try {
+      if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+        const result = await detector.detect(video);
+        const value = result[0]?.rawValue?.trim();
+        if (value) {
+          stop();
+          onResult(value);
+          return;
+        }
+      }
+    } catch (_error) {
+      // Keep scanning; transient decode errors are expected frame by frame.
+    }
+
+    timeoutId = window.setTimeout(scan, 45);
+  };
+
+  timeoutId = window.setTimeout(scan, 80);
+
+  return { stop };
 }
 
 function ListLoading({ rows = 3 }: { rows?: number }) {
@@ -605,10 +680,25 @@ function MobileScannerPage({ notify }: { notify: (tone: ToastState['tone'], text
     setScannerLoading(true);
 
     try {
+      const handleResult = (value: string) => {
+        controlsRef.current?.stop();
+        controlsRef.current = null;
+        setScannerLoading(false);
+        setScannerRunning(false);
+        void resolvePayload(value);
+      };
+      const nativeControls = await startNativeQrScanner(videoRef.current, handleResult);
+      if (nativeControls) {
+        controlsRef.current = nativeControls;
+        setScannerLoading(false);
+        setScannerRunning(true);
+        return;
+      }
+
       const { BrowserQRCodeReader } = await import('@zxing/browser');
       const reader = new BrowserQRCodeReader(undefined, {
-        delayBetweenScanAttempts: 80,
-        delayBetweenScanSuccess: 180,
+        delayBetweenScanAttempts: 45,
+        delayBetweenScanSuccess: 120,
         tryPlayVideoTimeout: 3500,
       });
       const onDecode = (result: ScannerResult | undefined, _error: unknown, controls: ScannerControls) => {
@@ -835,7 +925,7 @@ function MobileScannerPage({ notify }: { notify: (tone: ToastState['tone'], text
             </Button>
           ) : (
             <div className="grid gap-3 rounded-md border border-blue-500/20 bg-black/15 p-3">
-              <div className="grid grid-cols-[1fr_104px] gap-2">
+              <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_12rem]">
                 <Field label="Turma">
                   <SearchableSelect
                     value={classFilter}
