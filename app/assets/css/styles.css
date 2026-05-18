@@ -294,6 +294,33 @@
   color: var(--bs-primary-text-emphasis);
 }
 
+.history-book-scope {
+  background: rgba(5, 5, 7, .36);
+  border: 1px solid rgba(var(--bs-primary-rgb), .36);
+  border-radius: 8px;
+  padding: .85rem;
+}
+
+.history-book-title {
+  font-size: 1.25rem;
+  line-height: 1.25;
+}
+
+.book-detail-summary {
+  background: rgba(5, 5, 7, .36);
+  border: 1px solid rgba(var(--bs-primary-rgb), .36);
+  border-radius: 8px;
+  padding: 1rem;
+}
+
+.copy-detail-card {
+  border-color: rgba(var(--bs-primary-rgb), .2);
+}
+
+.copy-card-active {
+  border-color: rgba(var(--bs-primary-rgb), .82);
+}
+
 .filter-disabled {
   opacity: .58;
 }

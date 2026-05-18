@@ -12,7 +12,7 @@ const statusBadge = [
 const booksList = document.getElementById('books-list-cards');
 const booksSummary = document.getElementById('books-result-summary');
 const pageParams = new URLSearchParams(window.location.search);
-const initialDelayedMode = pageParams.has('atrasos');
+const initialDelayedMode = window.location.pathname === '/atrasados' || pageParams.has('atrasos');
 let searchTerm = pageParams.get('search') || '';
 let statusFilter = initialDelayedMode ? '2' : pageParams.get('status') || '';
 let tagFilter = pageParams.get('tag') || '';
@@ -23,18 +23,35 @@ let booksHasMore = true;
 let booksLoading = false;
 let booksPendingReload = false;
 
-const loadMoreBooksButton = document.createElement('button');
-loadMoreBooksButton.className = 'btn btn-outline-primary m-2';
-loadMoreBooksButton.type = 'button';
-loadMoreBooksButton.textContent = 'Carregar mais';
-loadMoreBooksButton.addEventListener('click', () => loadBooks(false));
-booksList.after(loadMoreBooksButton);
+const booksPagination = document.createElement('div');
+booksPagination.className = 'd-flex flex-wrap align-items-center justify-content-between gap-2 m-2';
+
+const previousBooksPageButton = document.createElement('button');
+previousBooksPageButton.className = 'btn btn-outline-primary';
+previousBooksPageButton.type = 'button';
+previousBooksPageButton.textContent = 'Anterior';
+previousBooksPageButton.addEventListener('click', () => goToBooksPage(-1));
+
+const booksPageInfo = document.createElement('span');
+booksPageInfo.className = 'list-summary';
+
+const nextBooksPageButton = document.createElement('button');
+nextBooksPageButton.className = 'btn btn-outline-primary';
+nextBooksPageButton.type = 'button';
+nextBooksPageButton.textContent = 'Próxima';
+nextBooksPageButton.addEventListener('click', () => goToBooksPage(1));
+
+booksPagination.append(previousBooksPageButton, booksPageInfo, nextBooksPageButton);
+booksList.after(booksPagination);
 
 const booksSearchInput = document.getElementById('books-search-input');
 const booksStatusFilter = document.getElementById('books-status-filter');
 const booksTagFilter = document.getElementById('books-tag-filter');
 const booksFilterForm = document.getElementById('books-filter-form');
 const booksFilterState = document.getElementById('books-filter-state');
+const booksClearFilters = document.getElementById('books-clear-filters');
+const booksNavLink = document.getElementById('Nav_btn_books');
+const overdueBooksNavLink = document.getElementById('Nav_btn_books_atrasos');
 
 function escapeHtml(value) {
     return String(value ?? '')
@@ -74,8 +91,19 @@ function bookStatusLabel(value) {
     return 'Todos';
 }
 
+function syncBooksNavigationState() {
+    if (booksNavLink) {
+        booksNavLink.classList.toggle('active', !returnToDelayedMode);
+    }
+    if (overdueBooksNavLink) {
+        overdueBooksNavLink.classList.toggle('active', returnToDelayedMode);
+    }
+}
+
 function syncBookFilterControls() {
     const searchActive = isBookSearchActive();
+
+    syncBooksNavigationState();
 
     if (booksSearchInput && booksSearchInput.value !== searchTerm) {
         booksSearchInput.value = searchTerm;
@@ -93,6 +121,10 @@ function syncBookFilterControls() {
 
     if (!booksFilterState) {
         return;
+    }
+
+    if (booksClearFilters) {
+        booksClearFilters.href = returnToDelayedMode ? '/atrasados' : '/';
     }
 
     booksFilterState.classList.toggle('filter-state-active', searchActive || Boolean(statusFilter) || Boolean(tagFilter));
@@ -113,13 +145,12 @@ function syncBookFilterControls() {
 
 function updateBooksLocation() {
     const params = new URLSearchParams();
+    const basePath = returnToDelayedMode ? '/atrasados' : '/';
 
     if (isBookSearchActive()) {
         params.set('search', searchTerm.trim());
     } else {
-        if (returnToDelayedMode && statusFilter === '2') {
-            params.set('atrasos', 'search');
-        } else if (statusFilter) {
+        if (statusFilter && !(returnToDelayedMode && statusFilter === '2')) {
             params.set('status', statusFilter);
         }
         if (tagFilter) {
@@ -128,7 +159,7 @@ function updateBooksLocation() {
     }
 
     const query = params.toString();
-    window.history.replaceState(null, '', `${window.location.pathname}${query ? `?${query}` : ''}`);
+    window.history.replaceState(null, '', `${basePath}${query ? `?${query}` : ''}`);
 }
 
 function resetBooksListState() {
@@ -146,6 +177,27 @@ function applyBookFilters() {
     updateReportLinks();
     updateBooksLocation();
     loadBooks(true);
+}
+
+function goToBooksPage(direction) {
+    if (booksLoading) {
+        return;
+    }
+
+    if (direction < 0 && booksOffset === 0) {
+        return;
+    }
+
+    if (direction > 0 && !booksHasMore) {
+        return;
+    }
+
+    booksOffset = Math.max(0, booksOffset + direction * BOOKS_PAGE_SIZE);
+    booksList.innerHTML = '';
+    if (booksSummary) {
+        booksSummary.textContent = 'Carregando resultados...';
+    }
+    loadBooks(false);
 }
 
 const scheduleBookSearchApply = debounce(() => {
@@ -191,7 +243,7 @@ function buildActions(id) {
     <div class="dropdown mt-1"><button class="btn btn-primary dropdown-toggle" aria-expanded="false" data-bs-toggle="dropdown" type="button"><svg class="mb-1" xmlns="http://www.w3.org/2000/svg" viewBox="-32 0 512 512" width="1em" height="1em" fill="currentColor" style="margin-right: 6px;font-size: 16px;">
                 <path d="M201 10.3c14.3-7.8 31.6-7.8 46 0L422.3 106c5.1 2.8 8.3 8.2 8.3 14s-3.2 11.2-8.3 14L231.7 238c-4.8 2.6-10.5 2.6-15.3 0L25.7 134c-5.1-2.8-8.3-8.2-8.3-14s3.2-11.2 8.3-14L201 10.3zM23.7 170l176 96c5.1 2.8 8.3 8.2 8.3 14V496c0 5.6-3 10.9-7.8 13.8s-10.9 3-15.8 .3L25 423.1C9.6 414.7 0 398.6 0 381V184c0-5.6 3-10.9 7.8-13.8s10.9-3 15.8-.3zm400.7 0c5-2.7 11-2.6 15.8 .3s7.8 8.1 7.8 13.8V381c0 17.6-9.6 33.7-25 42.1L263.7 510c-5 2.7-11 2.6-15.8-.3s-7.8-8.1-7.8-13.8V280c0-5.9 3.2-11.2 8.3-14l176-96z"></path>
             </svg>Ações</button>
-        <div class="dropdown-menu"><a class="dropdown-item" href="/?modal=${id}">Editar Livro</a><a class="dropdown-item" href="/historico?bookId=${id}">Histórico</a><a class="dropdown-item" href="/?emprestimo=${id}">Emprestimo</a><a class="dropdown-item" href="javascript:void(0)" onclick="removeBook(${id})">Deletar</a></div>
+        <div class="dropdown-menu"><a class="dropdown-item" href="/livros/${id}">Detalhes</a><a class="dropdown-item" href="/?modal=${id}">Editar Livro</a><a class="dropdown-item" href="/historico/livro/${id}">Histórico</a><a class="dropdown-item" href="/?emprestimo=${id}">Emprestimo</a><a class="dropdown-item" href="javascript:void(0)" onclick="removeBook(${id})">Deletar</a></div>
     </div>
     `;
 }
@@ -234,7 +286,7 @@ function buildCard(id, title, author, editor, isbn, status, tags, totalCopies, a
         <div class="container-fluid">
             <div class="row">
                 <div class="col-md-6">
-                    <h5 class="fw-bold"><a class="link-body-emphasis text-decoration-none" href="/historico?bookId=${id}">${escapeHtml(title)}</a></h5>
+                    <h5 class="fw-bold"><a class="link-body-emphasis text-decoration-none" href="/livros/${id}">${escapeHtml(title)}</a></h5>
                     <p class="mb-1">Informações: Author: ${escapeHtml(author)} | Editora: ${escapeHtml(editor)} | ISBN: ${escapeHtml(isbn)}</p>
                     <p class="mb-1">Status: ${safeStatus}</p>
                     <p class="mb-1">Exemplares: ${totalCopies || 1} | Disponíveis: ${availableCopies ?? 0} | Emprestados: ${loanedCopies ?? 0}</p>${tagsHtml}
@@ -258,7 +310,7 @@ function buildDelayedCard(book) {
                 <div class="row align-items-center g-3">
                     <div class="col-md-7">
                         <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
-                            <h5 class="fw-bold mb-0"><a class="link-body-emphasis text-decoration-none" href="/historico?bookId=${book.id}">${escapeHtml(book.titulo)}</a></h5>
+                            <h5 class="fw-bold mb-0"><a class="link-body-emphasis text-decoration-none" href="/livros/${book.id}">${escapeHtml(book.titulo)}</a></h5>
                             <span class="badge bg-danger">Atrasado</span>
                         </div>
                         <p class="mb-1">Leitor: <strong>${escapeHtml(book.leitor_nome || '-')}</strong> | Turma: ${escapeHtml(book.leitor_turma || '-')}</p>
@@ -336,18 +388,26 @@ function updateReportLinks() {
     }
 }
 
-function updateLoadMoreBooksButton() {
-    loadMoreBooksButton.classList.toggle('d-none', !booksHasMore);
-    loadMoreBooksButton.disabled = booksLoading;
+function updateBooksPaginationControls() {
+    previousBooksPageButton.disabled = booksLoading || booksOffset === 0;
+    nextBooksPageButton.disabled = booksLoading || !booksHasMore;
+
+    const currentPage = Math.floor(booksOffset / BOOKS_PAGE_SIZE) + 1;
+    booksPageInfo.textContent = `Página ${currentPage} | ${BOOKS_PAGE_SIZE} por página`;
 }
 
-function renderBooks(books, reset) {
-    if (reset) {
-        booksList.innerHTML = '';
-    }
+function renderBooks(books) {
+    booksList.innerHTML = '';
 
     if (books.length === 0 && booksOffset === 0) {
         alertError(isDelayedView() ? 'Nenhum livro atrasado!' : 'Não consegui achar nenhum livro em sua pesquisa!');
+        return;
+    }
+
+    if (books.length === 0) {
+        if (booksSummary) {
+            booksSummary.textContent = 'Nenhum livro nesta página.';
+        }
         return;
     }
 
@@ -375,12 +435,13 @@ function loadBooks(reset = false) {
         booksPendingReload = booksPendingReload || reset;
         return Promise.resolve();
     }
-    if (!reset && !booksHasMore) {
-        return Promise.resolve();
+
+    if (reset) {
+        booksOffset = 0;
     }
 
     booksLoading = true;
-    updateLoadMoreBooksButton();
+    updateBooksPaginationControls();
 
     return fetch(buildBooksUrl(reset))
         .then(response => {
@@ -392,14 +453,13 @@ function loadBooks(reset = false) {
             return response.json();
         })
         .then(data => {
-            if (reset) {
-                booksOffset = 0;
-            }
-
-            renderBooks(data, reset);
-            booksOffset += data.length;
+            renderBooks(data);
             if (booksSummary) {
-                booksSummary.textContent = `${booksOffset} livro(s) carregado(s)${booksHasMore ? ' - há mais resultados' : ''}`;
+                const start = data.length > 0 ? booksOffset + 1 : 0;
+                const end = booksOffset + data.length;
+                booksSummary.textContent = data.length > 0
+                    ? `Exibindo ${start}-${end}${booksHasMore ? ' | há mais resultados' : ''}`
+                    : 'Nenhum livro encontrado.';
             }
         })
         .catch(error => {
@@ -408,7 +468,7 @@ function loadBooks(reset = false) {
         })
         .finally(() => {
             booksLoading = false;
-            updateLoadMoreBooksButton();
+            updateBooksPaginationControls();
             if (booksPendingReload) {
                 booksPendingReload = false;
                 loadBooks(true);

@@ -1,5 +1,5 @@
 import type { SqliteConnection } from '../database/connection';
-import { containsNormalizedSearch, normalizeSearchTerm } from '../search';
+import { buildSearchText, buildSearchTextCondition } from '../search';
 
 export interface BookInput {
   titulo: string;
@@ -88,6 +88,22 @@ export interface LoanHistoryInfo {
   created_at: string;
 }
 
+export type CopyMovementType = 'CADASTRADO' | 'EMPRESTADO' | 'DEVOLVIDO';
+
+export interface CopyMovementInfo {
+  id: string;
+  tipo: CopyMovementType;
+  data: string;
+  livro_id: number;
+  livro_titulo: string;
+  exemplar_id: number;
+  exemplar_codigo: string;
+  leitor_id: number | null;
+  leitor_nome: string | null;
+  leitor_turma: string | null;
+  data_prazo: string | null;
+}
+
 export interface ListBooksOptions {
   search?: string;
   status?: number;
@@ -100,6 +116,7 @@ export interface ListLoanHistoryOptions {
   search?: string;
   status?: LoanHistoryStatus;
   bookId?: number;
+  copyId?: number;
   limit?: number;
   offset?: number;
 }
@@ -130,14 +147,59 @@ export interface ListResult<T> {
   hasMore: boolean;
 }
 
-const BOOK_SEARCH_COLUMNS = ['titulo', 'autor', 'editora', 'isbn', 'tags'];
-const HISTORY_SEARCH_COLUMNS = ['livro_titulo', 'leitor_nome', 'leitor_turma', 'exemplar_codigo'];
 const NORMALIZED_ISBN_SQL =
   "REPLACE(REPLACE(REPLACE(REPLACE(UPPER(COALESCE(isbn, '')), '-', ''), '.', ''), ' ', ''), '/', '')";
 const nowInMilliseconds = "(CAST(strftime('%s','now') AS REAL) * 1000)";
+const BOOK_INFO_SELECT = `
+  id,
+  titulo,
+  autor,
+  editora,
+  tags,
+  isbn,
+  status,
+  leitor_id,
+  leitor_nome,
+  leitor_turma,
+  data_emprestimo,
+  data_prazo,
+  exemplar_id,
+  exemplar_codigo,
+  exemplar_numero,
+  total_exemplares,
+  exemplares_disponiveis,
+  exemplares_emprestados,
+  exemplares_atrasados
+`;
+const LOAN_HISTORY_SELECT = `
+  id,
+  livro_id,
+  leitor_id,
+  livro_titulo,
+  leitor_nome,
+  leitor_turma,
+  exemplar_id,
+  exemplar_codigo,
+  data_emprestimo,
+  data_prazo,
+  data_devolucao,
+  status,
+  created_at
+`;
 
 function timestampAsMilliseconds(column: string): string {
   return `(CASE WHEN CAST(${column} AS REAL) < 10000000000 THEN CAST(${column} AS REAL) * 1000 ELSE CAST(${column} AS REAL) END)`;
+}
+
+function sortableTimestamp(column: string): string {
+  return `(
+    CASE
+      WHEN ${column} IS NULL THEN 0
+      WHEN ${column} GLOB '*[^0-9.]*' THEN CAST(strftime('%s', ${column}) AS REAL) * 1000
+      WHEN CAST(${column} AS REAL) < 10000000000 THEN CAST(${column} AS REAL) * 1000
+      ELSE CAST(${column} AS REAL)
+    END
+  )`;
 }
 
 export class BooksRepository {
@@ -146,11 +208,15 @@ export class BooksRepository {
   async list(options: ListBooksOptions = {}): Promise<ListResult<BookInfo>> {
     const params: unknown[] = [];
     const where: string[] = [];
-    const search = options.search?.trim() ? normalizeSearchTerm(options.search) : undefined;
 
     if (typeof options.status === 'number') {
-      where.push('status = ?');
-      params.push(options.status);
+      if (options.status === 0) {
+        where.push('exemplares_disponiveis > 0');
+      } else if (options.status === 1) {
+        where.push('exemplares_emprestados > 0');
+      } else if (options.status === 2) {
+        where.push('exemplares_atrasados > 0');
+      }
     }
 
     if (options.tag?.trim()) {
@@ -158,12 +224,18 @@ export class BooksRepository {
       params.push(`%,${options.tag.trim()},%`);
     }
 
+    const searchCondition = buildSearchTextCondition('search_text', options.search);
+    if (searchCondition) {
+      where.push(`(${searchCondition.sql})`);
+      params.push(...searchCondition.params);
+    }
+
     const limit = options.limit;
-    const offset = search ? 0 : options.offset ?? 0;
-    const effectiveLimit = !search && typeof limit === 'number' ? limit + 1 : undefined;
+    const offset = options.offset ?? 0;
+    const effectiveLimit = typeof limit === 'number' ? limit + 1 : undefined;
 
     let sql = `
-      SELECT *
+      SELECT ${BOOK_INFO_SELECT}
       FROM livros_infos
       ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''}
       ORDER BY titulo COLLATE NOCASE ASC, id ASC
@@ -175,47 +247,28 @@ export class BooksRepository {
     }
 
     const rows = await this.db.all<BookInfo>(sql, params);
-    const filteredRows = search
-      ? rows.filter((row) =>
-          containsNormalizedSearch(
-            BOOK_SEARCH_COLUMNS.map((column) => row[column as keyof BookInfo]),
-            search,
-          ),
-        )
-      : rows;
-
-    if (search && typeof limit === 'number') {
-      const pageOffset = options.offset ?? 0;
-      const pagedRows = filteredRows.slice(pageOffset, pageOffset + limit);
-
-      return {
-        rows: pagedRows,
-        hasMore: filteredRows.length > pageOffset + limit,
-      };
-    }
-
-    const hasMore = typeof limit === 'number' && filteredRows.length > limit;
+    const hasMore = typeof limit === 'number' && rows.length > limit;
 
     return {
-      rows: hasMore && typeof limit === 'number' ? filteredRows.slice(0, limit) : filteredRows,
+      rows: hasMore && typeof limit === 'number' ? rows.slice(0, limit) : rows,
       hasMore,
     };
   }
 
   getById(id: number): Promise<BookInfo | undefined> {
-    return this.db.get<BookInfo>('SELECT * FROM livros_infos WHERE id = ?', [id]);
+    return this.db.get<BookInfo>(`SELECT ${BOOK_INFO_SELECT} FROM livros_infos WHERE id = ?`, [id]);
   }
 
   findByNormalizedIsbn(isbn: string): Promise<BookInfo | undefined> {
-    return this.db.get<BookInfo>(`SELECT * FROM livros_infos WHERE ${NORMALIZED_ISBN_SQL} = ? LIMIT 1`, [
+    return this.db.get<BookInfo>(`SELECT ${BOOK_INFO_SELECT} FROM livros_infos WHERE ${NORMALIZED_ISBN_SQL} = ? LIMIT 1`, [
       isbn,
     ]);
   }
 
   async create(input: BookInput): Promise<number> {
     const result = await this.db.run(
-      'INSERT INTO livros (titulo, autor, editora, isbn, tags) VALUES (?, ?, ?, ?, ?)',
-      [input.titulo, input.autor, input.editora, input.isbn, input.tags],
+      'INSERT INTO livros (titulo, autor, editora, isbn, tags, search_text) VALUES (?, ?, ?, ?, ?, ?)',
+      [input.titulo, input.autor, input.editora, input.isbn, input.tags, buildBookSearchText(input)],
     );
 
     await this.createCopy(result.lastID, 1);
@@ -225,8 +278,8 @@ export class BooksRepository {
 
   async update(id: number, input: BookInput): Promise<boolean> {
     const result = await this.db.run(
-      'UPDATE livros SET titulo = ?, autor = ?, editora = ?, isbn = ?, tags = ? WHERE id = ?',
-      [input.titulo, input.autor, input.editora, input.isbn, input.tags, id],
+      'UPDATE livros SET titulo = ?, autor = ?, editora = ?, isbn = ?, tags = ?, search_text = ? WHERE id = ?',
+      [input.titulo, input.autor, input.editora, input.isbn, input.tags, buildBookSearchText(input), id],
     );
 
     return result.changes > 0;
@@ -359,6 +412,67 @@ export class BooksRepository {
       LEFT JOIN leitores ON leitores.id = emprestimos.leitor_id
       WHERE livros_exemplares.id = ?`,
       [copyId],
+    );
+  }
+
+  listCopyMovements(copyId: number): Promise<CopyMovementInfo[]> {
+    return this.db.all<CopyMovementInfo>(
+      `SELECT *
+      FROM (
+        SELECT
+          'copy-' || livros_exemplares.id AS id,
+          'CADASTRADO' AS tipo,
+          livros_exemplares.created_at AS data,
+          livros.id AS livro_id,
+          livros.titulo AS livro_titulo,
+          livros_exemplares.id AS exemplar_id,
+          livros_exemplares.codigo AS exemplar_codigo,
+          NULL AS leitor_id,
+          NULL AS leitor_nome,
+          NULL AS leitor_turma,
+          NULL AS data_prazo
+        FROM livros_exemplares
+        JOIN livros ON livros.id = livros_exemplares.livro_id
+        WHERE livros_exemplares.id = ?
+
+        UNION ALL
+
+        SELECT
+          'loan-' || emprestimos_historico.id AS id,
+          'EMPRESTADO' AS tipo,
+          emprestimos_historico.data_emprestimo AS data,
+          emprestimos_historico.livro_id,
+          emprestimos_historico.livro_titulo,
+          emprestimos_historico.exemplar_id,
+          COALESCE(emprestimos_historico.exemplar_codigo, livros_exemplares.codigo) AS exemplar_codigo,
+          emprestimos_historico.leitor_id,
+          emprestimos_historico.leitor_nome,
+          emprestimos_historico.leitor_turma,
+          emprestimos_historico.data_prazo
+        FROM emprestimos_historico
+        LEFT JOIN livros_exemplares ON livros_exemplares.id = emprestimos_historico.exemplar_id
+        WHERE emprestimos_historico.exemplar_id = ?
+
+        UNION ALL
+
+        SELECT
+          'return-' || emprestimos_historico.id AS id,
+          'DEVOLVIDO' AS tipo,
+          emprestimos_historico.data_devolucao AS data,
+          emprestimos_historico.livro_id,
+          emprestimos_historico.livro_titulo,
+          emprestimos_historico.exemplar_id,
+          COALESCE(emprestimos_historico.exemplar_codigo, livros_exemplares.codigo) AS exemplar_codigo,
+          emprestimos_historico.leitor_id,
+          emprestimos_historico.leitor_nome,
+          emprestimos_historico.leitor_turma,
+          emprestimos_historico.data_prazo
+        FROM emprestimos_historico
+        LEFT JOIN livros_exemplares ON livros_exemplares.id = emprestimos_historico.exemplar_id
+        WHERE emprestimos_historico.exemplar_id = ? AND emprestimos_historico.data_devolucao IS NOT NULL
+      )
+      ORDER BY ${sortableTimestamp('data')} DESC, id DESC`,
+      [copyId, copyId, copyId],
     );
   }
 
@@ -498,8 +612,9 @@ export class BooksRepository {
         data_emprestimo,
         data_prazo,
         data_devolucao,
-        status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        status,
+        search_text
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         input.livro_id,
         input.leitor_id,
@@ -512,6 +627,7 @@ export class BooksRepository {
         String(input.data_prazo),
         input.data_devolucao == null ? null : String(input.data_devolucao),
         input.status,
+        buildLoanHistorySearchText(input),
       ],
     );
   }
@@ -550,7 +666,6 @@ export class BooksRepository {
   async listLoanHistory(options: ListLoanHistoryOptions = {}): Promise<ListResult<LoanHistoryInfo>> {
     const params: unknown[] = [];
     const where: string[] = [];
-    const search = options.search?.trim() ? normalizeSearchTerm(options.search) : undefined;
 
     if (options.status) {
       where.push('status = ?');
@@ -562,12 +677,23 @@ export class BooksRepository {
       params.push(options.bookId);
     }
 
+    if (options.copyId) {
+      where.push('exemplar_id = ?');
+      params.push(options.copyId);
+    }
+
+    const searchCondition = buildSearchTextCondition('search_text', options.search);
+    if (searchCondition) {
+      where.push(`(${searchCondition.sql})`);
+      params.push(...searchCondition.params);
+    }
+
     const limit = options.limit;
-    const offset = search ? 0 : options.offset ?? 0;
-    const effectiveLimit = !search && typeof limit === 'number' ? limit + 1 : undefined;
+    const offset = options.offset ?? 0;
+    const effectiveLimit = typeof limit === 'number' ? limit + 1 : undefined;
 
     let sql = `
-      SELECT *
+      SELECT ${LOAN_HISTORY_SELECT}
       FROM emprestimos_historico
       ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''}
       ORDER BY CAST(COALESCE(data_devolucao, data_emprestimo) AS REAL) DESC, id DESC
@@ -579,29 +705,10 @@ export class BooksRepository {
     }
 
     const rows = await this.db.all<LoanHistoryInfo>(sql, params);
-    const filteredRows = search
-      ? rows.filter((row) =>
-          containsNormalizedSearch(
-            HISTORY_SEARCH_COLUMNS.map((column) => row[column as keyof LoanHistoryInfo]),
-            search,
-          ),
-        )
-      : rows;
-
-    if (search && typeof limit === 'number') {
-      const pageOffset = options.offset ?? 0;
-      const pagedRows = filteredRows.slice(pageOffset, pageOffset + limit);
-
-      return {
-        rows: pagedRows,
-        hasMore: filteredRows.length > pageOffset + limit,
-      };
-    }
-
-    const hasMore = typeof limit === 'number' && filteredRows.length > limit;
+    const hasMore = typeof limit === 'number' && rows.length > limit;
 
     return {
-      rows: hasMore && typeof limit === 'number' ? filteredRows.slice(0, limit) : filteredRows,
+      rows: hasMore && typeof limit === 'number' ? rows.slice(0, limit) : rows,
       hasMore,
     };
   }
@@ -616,7 +723,7 @@ export class BooksRepository {
 
   exportLoanHistory(): Promise<LoanHistoryInfo[]> {
     return this.db.all<LoanHistoryInfo>(
-      `SELECT *
+      `SELECT ${LOAN_HISTORY_SELECT}
       FROM emprestimos_historico
       ORDER BY CAST(COALESCE(data_devolucao, data_emprestimo) AS REAL) DESC, id DESC`,
     );
@@ -625,4 +732,17 @@ export class BooksRepository {
 
 function formatCopyCode(bookId: number, number: number): string {
   return `B${String(bookId).padStart(4, '0')}-E${String(number).padStart(2, '0')}`;
+}
+
+function buildBookSearchText(input: BookInput): string {
+  return buildSearchText([input.titulo, input.autor, input.editora, input.isbn, input.tags]);
+}
+
+function buildLoanHistorySearchText(input: LoanHistoryInput): string {
+  return buildSearchText([
+    input.livro_titulo,
+    input.leitor_nome,
+    input.leitor_turma,
+    input.exemplar_codigo,
+  ]);
 }

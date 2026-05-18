@@ -1,13 +1,13 @@
 import type { Express, NextFunction, Request, Response } from 'express';
 import { Router } from 'express';
-import QRCode from 'qrcode';
 import type { AppConfig } from '../config';
 import { AppError, isAppError } from '../errors';
 import type { BookInfo, BookLabelInfo, LoanHistoryStatus } from '../repositories/booksRepository';
 import { BooksRepository } from '../repositories/booksRepository';
 import { StatsRepository } from '../repositories/statsRepository';
 import { UsersRepository } from '../repositories/usersRepository';
-import { buildBooksPdfReport, buildOverduePdfReport } from '../reports/pdfReport';
+import { buildBooksPdfReport, buildLabelsPdfReport, buildOverduePdfReport } from '../reports/pdfReport';
+import { normalizeSearchTerm } from '../search';
 import { lookupBookByIsbn } from '../services/isbnService';
 import { LibraryService } from '../services/libraryService';
 
@@ -17,9 +17,15 @@ interface ApiDependencies {
   stats: StatsRepository;
   library: LibraryService;
   getConfig: () => AppConfig;
+  setConfig: (input: Partial<AppConfig>) => AppConfig;
 }
 
 type AsyncHandler = (request: Request, response: Response, next: NextFunction) => Promise<void>;
+
+const DEFAULT_PAGE_LIMIT = 60;
+const MAX_PAGE_LIMIT = 200;
+const DEFAULT_CLASS_LIMIT = 20;
+const MAX_CLASS_LIMIT = 100;
 
 export function registerApiRoutes(app: Express, dependencies: ApiDependencies): void {
   const router = Router();
@@ -62,16 +68,17 @@ export function registerApiRoutes(app: Express, dependencies: ApiDependencies): 
   router.get(
     '/books',
     asyncRoute(async (request, response) => {
+      const limit = pageLimit(request.query.limit);
+      const offset = optionalOffset(request.query.offset);
       const result = await dependencies.books.list({
         search: singleQueryValue(request.query.search),
         status: optionalNumber(request.query.status),
         tag: singleQueryValue(request.query.tag),
-        limit: optionalLimit(request.query.limit),
-        offset: optionalOffset(request.query.offset),
+        limit,
+        offset,
       });
 
-      response.setHeader('X-Has-More', result.hasMore ? '1' : '0');
-      response.json(result.rows);
+      sendPaginatedJson(response, result.rows, result.hasMore, limit, offset);
     }),
   );
 
@@ -162,15 +169,16 @@ export function registerApiRoutes(app: Express, dependencies: ApiDependencies): 
   router.get(
     '/users',
     asyncRoute(async (request, response) => {
+      const limit = pageLimit(request.query.limit);
+      const offset = optionalOffset(request.query.offset);
       const result = await dependencies.users.list({
         search: singleQueryValue(request.query.search),
         turma: singleQueryValue(request.query.turma),
-        limit: optionalLimit(request.query.limit),
-        offset: optionalOffset(request.query.offset),
+        limit,
+        offset,
       });
 
-      response.setHeader('X-Has-More', result.hasMore ? '1' : '0');
-      response.json(result.rows);
+      sendPaginatedJson(response, result.rows, result.hasMore, limit, offset);
     }),
   );
 
@@ -179,6 +187,13 @@ export function registerApiRoutes(app: Express, dependencies: ApiDependencies): 
     asyncRoute(async (request, response) => {
       const bookIds = parseIdList(singleQueryValue(request.query.bookIds));
       response.json(await dependencies.books.listCopiesForBooks(bookIds));
+    }),
+  );
+
+  router.get(
+    '/book-copies/:id/movements',
+    asyncRoute(async (request, response) => {
+      response.json(await dependencies.books.listCopyMovements(parseId(request.params.id)));
     }),
   );
 
@@ -207,16 +222,18 @@ export function registerApiRoutes(app: Express, dependencies: ApiDependencies): 
   router.get(
     '/loans/history',
     asyncRoute(async (request, response) => {
+      const limit = pageLimit(request.query.limit);
+      const offset = optionalOffset(request.query.offset);
       const result = await dependencies.books.listLoanHistory({
         search: singleQueryValue(request.query.search),
         status: optionalLoanHistoryStatus(request.query.status),
         bookId: optionalNumber(request.query.bookId),
-        limit: optionalLimit(request.query.limit),
-        offset: optionalOffset(request.query.offset),
+        copyId: optionalNumber(request.query.copyId),
+        limit,
+        offset,
       });
 
-      response.setHeader('X-Has-More', result.hasMore ? '1' : '0');
-      response.json(result.rows);
+      sendPaginatedJson(response, result.rows, result.hasMore, limit, offset);
     }),
   );
 
@@ -237,6 +254,32 @@ export function registerApiRoutes(app: Express, dependencies: ApiDependencies): 
   router.get('/config', (_request, response) => {
     response.json(dependencies.getConfig());
   });
+
+  router.get(
+    '/classes',
+    asyncRoute(async (request, response) => {
+      const search = normalizeSearchTerm(singleQueryValue(request.query.search) ?? '');
+      const limit = classLimit(request.query.limit);
+      const classes = dependencies.getConfig().turmas
+        .filter((classItem) => {
+          if (!search) {
+            return true;
+          }
+
+          return normalizeSearchTerm(`${classItem.nome} ${classItem.value}`).includes(search);
+        })
+        .slice(0, limit);
+
+      response.json(classes);
+    }),
+  );
+
+  router.put(
+    '/config',
+    asyncRoute(async (request, response) => {
+      response.json(dependencies.setConfig(request.body));
+    }),
+  );
 
   app.use('/api', router);
 
@@ -301,10 +344,11 @@ export function registerApiRoutes(app: Express, dependencies: ApiDependencies): 
       const labels = copyIds.length > 0
         ? await dependencies.books.listCopiesByIds(copyIds)
         : await labelsFromBooksQuery(request, dependencies.books);
-      const html = await renderBookLabelsHtml(labels);
+      const pdf = await buildLabelsPdfReport(labels, dependencies.getConfig());
 
-      response.setHeader('Content-Type', 'text/html; charset=utf-8');
-      response.send(html);
+      response.setHeader('Content-Type', 'application/pdf');
+      response.setHeader('Content-Disposition', 'attachment; filename="etiquetas-livros.pdf"');
+      response.send(pdf);
     }),
   );
 }
@@ -393,14 +437,24 @@ function parseIdList(value: string | undefined): number[] {
     .filter((item) => Number.isInteger(item) && item > 0);
 }
 
-function optionalLimit(value: unknown): number | undefined {
+function pageLimit(value: unknown): number {
   const parsed = optionalNumber(value);
 
   if (!parsed || parsed <= 0) {
-    return undefined;
+    return DEFAULT_PAGE_LIMIT;
   }
 
-  return Math.min(parsed, 200);
+  return Math.min(parsed, MAX_PAGE_LIMIT);
+}
+
+function classLimit(value: unknown): number {
+  const parsed = optionalNumber(value);
+
+  if (!parsed || parsed <= 0) {
+    return DEFAULT_CLASS_LIMIT;
+  }
+
+  return Math.min(parsed, MAX_CLASS_LIMIT);
 }
 
 function optionalOffset(value: unknown): number {
@@ -411,6 +465,20 @@ function optionalOffset(value: unknown): number {
   }
 
   return parsed;
+}
+
+function sendPaginatedJson<T>(
+  response: Response,
+  rows: T[],
+  hasMore: boolean,
+  limit: number,
+  offset: number,
+): void {
+  response.setHeader('X-Has-More', hasMore ? '1' : '0');
+  response.setHeader('X-Limit', String(limit));
+  response.setHeader('X-Offset', String(offset));
+  response.setHeader('X-Next-Offset', String(offset + rows.length));
+  response.json(rows);
 }
 
 async function labelsFromBooksQuery(request: Request, books: BooksRepository): Promise<BookLabelInfo[]> {
@@ -427,84 +495,4 @@ async function labelsFromBooksQuery(request: Request, books: BooksRepository): P
   });
 
   return books.listCopiesForBooks(result.rows.map((book) => book.id));
-}
-
-async function renderBookLabelsHtml(labelsSource: BookLabelInfo[]): Promise<string> {
-  const labels = await Promise.all(
-    labelsSource.map(async (copy) => ({
-      copy,
-      qr: await QRCode.toDataURL(buildBookQrPayload(copy), {
-        errorCorrectionLevel: 'M',
-        margin: 1,
-        width: 112,
-      }),
-    })),
-  );
-
-  return `<!doctype html>
-<html lang="pt-BR">
-<head>
-  <meta charset="utf-8">
-  <title>Etiquetas QR - Book DB</title>
-  <style>
-    * { box-sizing: border-box; }
-    body { margin: 0; padding: 18px; font-family: Arial, sans-serif; color: #111; background: #fff; }
-    .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; gap: 12px; }
-    .toolbar h1 { font-size: 18px; margin: 0; }
-    .toolbar button { border: 1px solid #111; background: #fff; padding: 8px 12px; cursor: pointer; }
-    .labels { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; }
-    .label { min-height: 124px; border: 1px dashed #444; padding: 8px; display: grid; grid-template-columns: 82px 1fr; gap: 8px; align-items: center; break-inside: avoid; }
-    .label img { width: 82px; height: 82px; }
-    .title { font-size: 12px; font-weight: 700; line-height: 1.2; margin-bottom: 4px; overflow-wrap: anywhere; }
-    .meta { font-size: 10px; line-height: 1.25; color: #333; overflow-wrap: anywhere; }
-    @media print {
-      body { padding: 0; }
-      .toolbar { display: none; }
-      .labels { gap: 0; grid-template-columns: repeat(3, 1fr); }
-      .label { border: 1px solid #888; margin: 0; page-break-inside: avoid; }
-    }
-  </style>
-</head>
-<body>
-  <div class="toolbar">
-    <h1>Etiquetas QR (${labels.length} livro(s))</h1>
-    <button onclick="window.print()">Imprimir</button>
-  </div>
-  <main class="labels">
-    ${labels.map(({ copy, qr }) => renderBookLabel(copy, qr)).join('')}
-  </main>
-</body>
-</html>`;
-}
-
-function renderBookLabel(copy: BookLabelInfo, qr: string): string {
-  return `<section class="label">
-  <img src="${qr}" alt="QR do exemplar ${escapeHtml(copy.codigo)}">
-  <div>
-    <div class="title">${escapeHtml(copy.titulo)}</div>
-    <div class="meta">Exemplar: ${escapeHtml(copy.codigo)}</div>
-    <div class="meta">ISBN: ${escapeHtml(copy.isbn || '-')}</div>
-    <div class="meta">Autor: ${escapeHtml(copy.autor || '-')}</div>
-  </div>
-</section>`;
-}
-
-function buildBookQrPayload(copy: BookLabelInfo): string {
-  return JSON.stringify({
-    type: 'book-copy',
-    bookId: copy.livro_id,
-    copyId: copy.id,
-    code: copy.codigo,
-    isbn: copy.isbn || '',
-    title: copy.titulo,
-  });
-}
-
-function escapeHtml(value: unknown): string {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
 }

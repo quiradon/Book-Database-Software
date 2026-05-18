@@ -1,4 +1,5 @@
 import type { SqliteConnection } from './connection';
+import { buildSearchText } from '../search';
 
 interface Migration {
   id: number;
@@ -8,6 +9,17 @@ interface Migration {
 
 function timestampAsMilliseconds(column: string): string {
   return `(CASE WHEN CAST(${column} AS REAL) < 10000000000 THEN CAST(${column} AS REAL) * 1000 ELSE CAST(${column} AS REAL) END)`;
+}
+
+function sortableTimestamp(column: string): string {
+  return `(
+    CASE
+      WHEN ${column} IS NULL THEN 0
+      WHEN ${column} GLOB '*[^0-9.]*' THEN CAST(strftime('%s', ${column}) AS REAL) * 1000
+      WHEN CAST(${column} AS REAL) < 10000000000 THEN CAST(${column} AS REAL) * 1000
+      ELSE CAST(${column} AS REAL)
+    END
+  )`;
 }
 
 const nowInMilliseconds = "(CAST(strftime('%s','now') AS REAL) * 1000)";
@@ -98,8 +110,7 @@ const createCopyAwareViewsSql = `
       livros.*,
       CASE
         WHEN IFNULL(exemplar_stats.exemplares_atrasados, 0) > 0 THEN 2
-        WHEN IFNULL(exemplar_stats.exemplares_disponiveis, 0) = 0
-          AND IFNULL(exemplar_stats.exemplares_emprestados, 0) > 0 THEN 1
+        WHEN IFNULL(exemplar_stats.exemplares_emprestados, 0) > 0 THEN 1
         ELSE 0
       END AS status,
       emprestimos.leitor_id,
@@ -380,6 +391,118 @@ const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_historico_exemplar ON emprestimos_historico(exemplar_id);
 
         ${createCopyAwareViewsSql}
+      `);
+    },
+  },
+  {
+    id: 6,
+    name: 'indexed_search_text',
+    up: async (db) => {
+      await addColumnIfMissing(db, 'livros', 'search_text', "TEXT NOT NULL DEFAULT ''");
+      await addColumnIfMissing(db, 'leitores', 'search_text', "TEXT NOT NULL DEFAULT ''");
+      await addColumnIfMissing(db, 'emprestimos_historico', 'search_text', "TEXT NOT NULL DEFAULT ''");
+
+      const books = await db.all<{
+        id: number;
+        titulo: string;
+        autor: string;
+        editora: string | null;
+        isbn: string | null;
+        tags: string | null;
+      }>('SELECT id, titulo, autor, editora, isbn, tags FROM livros');
+
+      for (const book of books) {
+        await db.run('UPDATE livros SET search_text = ? WHERE id = ?', [
+          buildSearchText([book.titulo, book.autor, book.editora, book.isbn, book.tags]),
+          book.id,
+        ]);
+      }
+
+      const users = await db.all<{
+        id: number;
+        nome: string;
+        turma: string;
+        contato: string;
+      }>('SELECT id, nome, turma, contato FROM leitores');
+
+      for (const user of users) {
+        await db.run('UPDATE leitores SET search_text = ? WHERE id = ?', [
+          buildSearchText([user.nome, user.turma, user.contato]),
+          user.id,
+        ]);
+      }
+
+      const historyItems = await db.all<{
+        id: number;
+        livro_titulo: string;
+        leitor_nome: string;
+        leitor_turma: string;
+        exemplar_codigo: string | null;
+      }>('SELECT id, livro_titulo, leitor_nome, leitor_turma, exemplar_codigo FROM emprestimos_historico');
+
+      for (const historyItem of historyItems) {
+        await db.run('UPDATE emprestimos_historico SET search_text = ? WHERE id = ?', [
+          buildSearchText([
+            historyItem.livro_titulo,
+            historyItem.leitor_nome,
+            historyItem.leitor_turma,
+            historyItem.exemplar_codigo,
+          ]),
+          historyItem.id,
+        ]);
+      }
+
+      await db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_livros_search_text ON livros(search_text);
+        CREATE INDEX IF NOT EXISTS idx_leitores_search_text ON leitores(search_text);
+        CREATE INDEX IF NOT EXISTS idx_historico_search_text ON emprestimos_historico(search_text);
+      `);
+    },
+  },
+  {
+    id: 7,
+    name: 'loaned_book_status_view',
+    up: async (db) => {
+      await db.exec(createCopyAwareViewsSql);
+    },
+  },
+  {
+    id: 8,
+    name: 'copy_created_at_backfill',
+    up: async (db) => {
+      await addColumnIfMissing(db, 'livros_exemplares', 'created_at', 'TEXT');
+      await db.exec(`
+        UPDATE livros_exemplares
+        SET created_at = COALESCE((
+          SELECT CAST(MIN(${timestampAsMilliseconds('emprestimos_historico.data_emprestimo')}) - 1 AS TEXT)
+          FROM emprestimos_historico
+          WHERE emprestimos_historico.exemplar_id = livros_exemplares.id
+        ), CURRENT_TIMESTAMP)
+        WHERE created_at IS NULL OR created_at = '';
+      `);
+    },
+  },
+  {
+    id: 9,
+    name: 'copy_created_at_before_first_loan',
+    up: async (db) => {
+      await db.exec(`
+        UPDATE livros_exemplares
+        SET created_at = (
+          SELECT CAST(MIN(${timestampAsMilliseconds('emprestimos_historico.data_emprestimo')}) - 1 AS TEXT)
+          FROM emprestimos_historico
+          WHERE emprestimos_historico.exemplar_id = livros_exemplares.id
+        )
+        WHERE (
+          SELECT MIN(${timestampAsMilliseconds('emprestimos_historico.data_emprestimo')})
+          FROM emprestimos_historico
+          WHERE emprestimos_historico.exemplar_id = livros_exemplares.id
+        ) IS NOT NULL
+        AND ${sortableTimestamp('created_at')} > (
+          SELECT MIN(${timestampAsMilliseconds('emprestimos_historico.data_emprestimo')})
+          FROM emprestimos_historico
+          WHERE emprestimos_historico.exemplar_id = livros_exemplares.id
+        );
       `);
     },
   },

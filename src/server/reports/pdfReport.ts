@@ -1,4 +1,7 @@
-import type { BookInfo } from '../repositories/booksRepository';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import QRCode from 'qrcode';
+import type { AppConfig } from '../config';
+import type { BookInfo, BookLabelInfo } from '../repositories/booksRepository';
 
 interface PdfLine {
   text: string;
@@ -11,6 +14,10 @@ const PAGE_HEIGHT = 841.89;
 const MARGIN = 42;
 const LINE_HEIGHT = 14;
 const FONT_OBJECT_ID = 3;
+const LABEL_MARGIN = 24;
+const LABEL_GAP = 8;
+const LABEL_COLUMNS = 3;
+const LABEL_ROWS = 8;
 
 export function buildBooksPdfReport(books: BookInfo[], title: string): Buffer {
   const lines: PdfLine[] = [
@@ -71,6 +78,54 @@ export function buildOverduePdfReport(books: BookInfo[]): Buffer {
   }
 
   return renderPdf(lines);
+}
+
+export async function buildLabelsPdfReport(labels: BookLabelInfo[], config: AppConfig): Promise<Buffer> {
+  const pdf = await PDFDocument.create();
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  const boldFont = await pdf.embedFont(StandardFonts.HelveticaBold);
+  const logo = await embedLogo(pdf, config.logo_data_url);
+  const labelWidth = (PAGE_WIDTH - LABEL_MARGIN * 2 - LABEL_GAP * (LABEL_COLUMNS - 1)) / LABEL_COLUMNS;
+  const labelHeight = (PAGE_HEIGHT - LABEL_MARGIN * 2 - LABEL_GAP * (LABEL_ROWS - 1)) / LABEL_ROWS;
+  let page = pdf.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+
+  for (let index = 0; index < labels.length; index += 1) {
+    if (index > 0 && index % (LABEL_COLUMNS * LABEL_ROWS) === 0) {
+      page = pdf.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+    }
+
+    const pageIndex = index % (LABEL_COLUMNS * LABEL_ROWS);
+    const column = pageIndex % LABEL_COLUMNS;
+    const row = Math.floor(pageIndex / LABEL_COLUMNS);
+    const x = LABEL_MARGIN + column * (labelWidth + LABEL_GAP);
+    const y = PAGE_HEIGHT - LABEL_MARGIN - labelHeight - row * (labelHeight + LABEL_GAP);
+    const qr = await embedQrCode(pdf, labels[index]);
+
+    drawLabel(page, {
+      label: labels[index],
+      libraryName: config.library_name,
+      logo,
+      qr,
+      x,
+      y,
+      width: labelWidth,
+      height: labelHeight,
+      font,
+      boldFont,
+    });
+  }
+
+  if (labels.length === 0) {
+    page.drawText('Nenhuma etiqueta encontrada para os filtros atuais.', {
+      x: LABEL_MARGIN,
+      y: PAGE_HEIGHT - LABEL_MARGIN - 14,
+      size: 12,
+      font,
+      color: rgb(0.1, 0.1, 0.1),
+    });
+  }
+
+  return Buffer.from(await pdf.save());
 }
 
 export function daysOverdue(value: string | number | null): number {
@@ -257,4 +312,163 @@ function normalizeTimestamp(value: string | number | null): number | null {
   }
 
   return Math.abs(numberValue) < 10000000000 ? numberValue * 1000 : numberValue;
+}
+
+async function embedQrCode(pdf: PDFDocument, label: BookLabelInfo) {
+  const dataUrl = await QRCode.toDataURL(buildBookQrPayload(label), {
+    errorCorrectionLevel: 'M',
+    margin: 1,
+    width: 180,
+  });
+  return pdf.embedPng(dataUrlToBytes(dataUrl));
+}
+
+async function embedLogo(pdf: PDFDocument, logoDataUrl: string) {
+  if (!logoDataUrl) {
+    return null;
+  }
+
+  try {
+    const bytes = dataUrlToBytes(logoDataUrl);
+    if (/^data:image\/png/i.test(logoDataUrl)) {
+      return await pdf.embedPng(bytes);
+    }
+
+    if (/^data:image\/jpe?g/i.test(logoDataUrl)) {
+      return await pdf.embedJpg(bytes);
+    }
+  } catch (_error) {
+    return null;
+  }
+
+  return null;
+}
+
+function drawLabel(
+  page: ReturnType<PDFDocument['addPage']>,
+  options: {
+    label: BookLabelInfo;
+    libraryName: string;
+    logo: Awaited<ReturnType<typeof embedLogo>>;
+    qr: Awaited<ReturnType<typeof embedQrCode>>;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    font: Awaited<ReturnType<PDFDocument['embedFont']>>;
+    boldFont: Awaited<ReturnType<PDFDocument['embedFont']>>;
+  },
+): void {
+  const { label, libraryName, logo, qr, x, y, width, height, font, boldFont } = options;
+  const padding = 5;
+  const qrSize = 48;
+  const logoSize = 18;
+  const textX = x + padding + qrSize + 6;
+  const textWidth = width - padding * 2 - qrSize - 8;
+  const top = y + height - padding;
+
+  page.drawRectangle({
+    x,
+    y,
+    width,
+    height,
+    borderColor: rgb(0.35, 0.35, 0.35),
+    borderWidth: 0.6,
+    color: rgb(1, 1, 1),
+  });
+  page.drawImage(qr, {
+    x: x + padding,
+    y: y + height - padding - qrSize,
+    width: qrSize,
+    height: qrSize,
+  });
+
+  if (logo) {
+    const scaled = logo.scaleToFit(logoSize, logoSize);
+    page.drawImage(logo, {
+      x: textX,
+      y: top - scaled.height,
+      width: scaled.width,
+      height: scaled.height,
+    });
+  } else {
+    page.drawRectangle({
+      x: textX,
+      y: top - logoSize,
+      width: logoSize,
+      height: logoSize,
+      color: rgb(0.12, 0.32, 0.72),
+    });
+    page.drawText(initials(libraryName), {
+      x: textX + 3,
+      y: top - 12,
+      size: 6,
+      font: boldFont,
+      color: rgb(1, 1, 1),
+    });
+  }
+
+  page.drawText(truncate(libraryName, 28), {
+    x: textX + logoSize + 4,
+    y: top - 8,
+    size: 7,
+    font: boldFont,
+    color: rgb(0.1, 0.1, 0.1),
+  });
+
+  const titleLines = wrapText(label.titulo, Math.max(18, Math.floor(textWidth / 4.6))).slice(0, 2);
+  let lineY = top - 24;
+  for (const line of titleLines) {
+    page.drawText(line, {
+      x: textX,
+      y: lineY,
+      size: 7.2,
+      font: boldFont,
+      color: rgb(0.05, 0.05, 0.05),
+    });
+    lineY -= 8;
+  }
+
+  const meta = [
+    `Exemplar: ${label.codigo}`,
+    `ISBN: ${label.isbn || '-'}`,
+    `Autor: ${truncate(label.autor || '-', 24)}`,
+  ];
+
+  lineY = Math.max(y + 9, lineY - 2);
+  for (const item of meta) {
+    page.drawText(item, {
+      x: x + padding,
+      y: lineY,
+      size: 6.2,
+      font,
+      color: rgb(0.18, 0.18, 0.18),
+    });
+    lineY -= 7;
+  }
+}
+
+function buildBookQrPayload(copy: BookLabelInfo): string {
+  return JSON.stringify({
+    type: 'book-copy',
+    bookId: copy.livro_id,
+    copyId: copy.id,
+    code: copy.codigo,
+    isbn: copy.isbn || '',
+    title: copy.titulo,
+  });
+}
+
+function dataUrlToBytes(value: string): Uint8Array {
+  const base64 = value.split(',')[1] ?? '';
+  return Uint8Array.from(Buffer.from(base64, 'base64'));
+}
+
+function truncate(value: string, maxLength: number): string {
+  return value.length > maxLength ? `${value.slice(0, Math.max(0, maxLength - 3))}...` : value;
+}
+
+function initials(value: string): string {
+  const parts = value.trim().split(/\s+/).filter(Boolean);
+  return (parts[0]?.[0] ?? 'B') + (parts[1]?.[0] ?? 'D');
 }

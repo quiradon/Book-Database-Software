@@ -7,12 +7,16 @@ export interface ClassConfig {
 }
 
 export interface AppConfig {
+  library_name: string;
+  logo_data_url: string;
   max_per_user: number;
   tags: string[];
   turmas: ClassConfig[];
 }
 
 const DEFAULT_CONFIG: AppConfig = {
+  library_name: 'Arkanu Book DB',
+  logo_data_url: '',
   max_per_user: 2,
   tags: [
     'Enem-Concursos',
@@ -102,12 +106,133 @@ export function loadConfig(projectRoot: string): AppConfig {
   const raw = fs.readFileSync(configPath(projectRoot), { encoding: 'utf8' });
   const config = JSON.parse(raw) as Partial<AppConfig>;
 
+  return normalizeConfig(config);
+}
+
+export function saveConfig(projectRoot: string, input: Partial<AppConfig>): AppConfig {
+  ensureConfig(projectRoot);
+  const current = loadConfig(projectRoot);
+  const next = normalizeConfig({
+    ...current,
+    ...input,
+  });
+
+  fs.writeFileSync(configPath(projectRoot), `${JSON.stringify(next, null, 2)}\n`, {
+    encoding: 'utf8',
+  });
+
+  return next;
+}
+
+function normalizeConfig(config: Partial<AppConfig>): AppConfig {
   return {
+    library_name: normalizeLibraryName(config.library_name),
+    logo_data_url: normalizeLogoDataUrl(config.logo_data_url),
     max_per_user:
       typeof config.max_per_user === 'number' && config.max_per_user > 0
         ? config.max_per_user
         : DEFAULT_CONFIG.max_per_user,
-    tags: Array.isArray(config.tags) ? config.tags : DEFAULT_CONFIG.tags,
-    turmas: Array.isArray(config.turmas) ? config.turmas : DEFAULT_CONFIG.turmas,
+    tags: normalizeTags(config.tags),
+    turmas: normalizeClasses(config.turmas),
   };
+}
+
+function normalizeLibraryName(value: unknown): string {
+  if (typeof value !== 'string') {
+    return DEFAULT_CONFIG.library_name;
+  }
+
+  const trimmed = value.trim();
+  return trimmed || DEFAULT_CONFIG.library_name;
+}
+
+function normalizeLogoDataUrl(value: unknown): string {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  if (!/^data:image\/(png|jpeg|jpg);base64,[a-z0-9+/=]+$/i.test(trimmed)) {
+    return '';
+  }
+
+  return trimmed.length <= 2_000_000 ? trimmed : '';
+}
+
+function normalizeTags(tags: unknown): string[] {
+  if (!Array.isArray(tags)) {
+    return DEFAULT_CONFIG.tags;
+  }
+
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+
+  for (const tag of tags) {
+    if (typeof tag !== 'string') {
+      continue;
+    }
+
+    const value = tag.trim();
+    const key = value.toLocaleLowerCase('pt-BR');
+
+    if (!value || seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    normalized.push(value);
+  }
+
+  return normalized.length > 0 ? normalized : DEFAULT_CONFIG.tags;
+}
+
+function normalizeClasses(classes: unknown): ClassConfig[] {
+  if (!Array.isArray(classes)) {
+    return DEFAULT_CONFIG.turmas;
+  }
+
+  const seen = new Set<string>();
+  const normalized: ClassConfig[] = [];
+
+  for (const item of classes) {
+    if (!item || typeof item !== 'object') {
+      continue;
+    }
+
+    const raw = item as Partial<ClassConfig>;
+    const nome = typeof raw.nome === 'string' ? raw.nome.trim() : '';
+    const preferredValue = typeof raw.value === 'string' ? raw.value.trim() : '';
+
+    if (!nome) {
+      continue;
+    }
+
+    let value = preferredValue || slugifyClassValue(nome);
+    let suffix = 2;
+
+    while (seen.has(value.toLocaleLowerCase('pt-BR'))) {
+      value = `${preferredValue || slugifyClassValue(nome)}-${suffix}`;
+      suffix += 1;
+    }
+
+    seen.add(value.toLocaleLowerCase('pt-BR'));
+    normalized.push({ nome, value });
+  }
+
+  return normalized.length > 0 ? normalized : DEFAULT_CONFIG.turmas;
+}
+
+function slugifyClassValue(value: string): string {
+  const slug = value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .toUpperCase();
+
+  return slug || 'TURMA';
 }

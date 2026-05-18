@@ -1,5 +1,5 @@
 import type { SqliteConnection } from '../database/connection';
-import { containsNormalizedSearch, normalizeSearchTerm } from '../search';
+import { buildSearchText, buildSearchTextCondition } from '../search';
 import type { ListResult } from './booksRepository';
 
 export interface UserInput {
@@ -22,30 +22,34 @@ export interface ListUsersOptions {
   offset?: number;
 }
 
-const USER_SEARCH_COLUMNS = ['nome', 'turma', 'contato'];
-
 export class UsersRepository {
   constructor(private readonly db: SqliteConnection) {}
 
   async list(options: ListUsersOptions = {}): Promise<ListResult<UserInfo>> {
     const params: unknown[] = [];
     const where: string[] = [];
-    const search = options.search?.trim() ? normalizeSearchTerm(options.search) : undefined;
 
     if (options.turma?.trim()) {
-      where.push('turma = ?');
+      where.push('leitores_infos.turma = ?');
       params.push(options.turma.trim());
     }
 
+    const searchCondition = buildSearchTextCondition('leitores.search_text', options.search);
+    if (searchCondition) {
+      where.push(`(${searchCondition.sql})`);
+      params.push(...searchCondition.params);
+    }
+
     const limit = options.limit;
-    const offset = search ? 0 : options.offset ?? 0;
-    const effectiveLimit = !search && typeof limit === 'number' ? limit + 1 : undefined;
+    const offset = options.offset ?? 0;
+    const effectiveLimit = typeof limit === 'number' ? limit + 1 : undefined;
 
     let sql = `
-      SELECT *
+      SELECT leitores_infos.*
       FROM leitores_infos
+      JOIN leitores ON leitores.id = leitores_infos.id
       ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''}
-      ORDER BY nome COLLATE NOCASE ASC, id ASC
+      ORDER BY leitores_infos.nome COLLATE NOCASE ASC, leitores_infos.id ASC
     `;
 
     if (typeof effectiveLimit === 'number') {
@@ -54,29 +58,10 @@ export class UsersRepository {
     }
 
     const rows = await this.db.all<UserInfo>(sql, params);
-    const filteredRows = search
-      ? rows.filter((row) =>
-          containsNormalizedSearch(
-            USER_SEARCH_COLUMNS.map((column) => row[column as keyof UserInfo]),
-            search,
-          ),
-        )
-      : rows;
-
-    if (search && typeof limit === 'number') {
-      const pageOffset = options.offset ?? 0;
-      const pagedRows = filteredRows.slice(pageOffset, pageOffset + limit);
-
-      return {
-        rows: pagedRows,
-        hasMore: filteredRows.length > pageOffset + limit,
-      };
-    }
-
-    const hasMore = typeof limit === 'number' && filteredRows.length > limit;
+    const hasMore = typeof limit === 'number' && rows.length > limit;
 
     return {
-      rows: hasMore && typeof limit === 'number' ? filteredRows.slice(0, limit) : filteredRows,
+      rows: hasMore && typeof limit === 'number' ? rows.slice(0, limit) : rows,
       hasMore,
     };
   }
@@ -92,10 +77,11 @@ export class UsersRepository {
   }
 
   async create(input: UserInput): Promise<number> {
-    const result = await this.db.run('INSERT INTO leitores (nome, contato, turma) VALUES (?, ?, ?)', [
+    const result = await this.db.run('INSERT INTO leitores (nome, contato, turma, search_text) VALUES (?, ?, ?, ?)', [
       input.nome,
       input.contato,
       input.turma,
+      buildUserSearchText(input),
     ]);
 
     return result.lastID;
@@ -103,8 +89,8 @@ export class UsersRepository {
 
   async update(id: number, input: UserInput): Promise<boolean> {
     const result = await this.db.run(
-      'UPDATE leitores SET nome = ?, contato = ?, turma = ? WHERE id = ?',
-      [input.nome, input.contato, input.turma, id],
+      'UPDATE leitores SET nome = ?, contato = ?, turma = ?, search_text = ? WHERE id = ?',
+      [input.nome, input.contato, input.turma, buildUserSearchText(input), id],
     );
 
     return result.changes > 0;
@@ -118,4 +104,8 @@ export class UsersRepository {
   exportRawUsers(): Promise<UserInput[]> {
     return this.db.all<UserInput>('SELECT nome, contato, turma FROM leitores ORDER BY nome COLLATE NOCASE ASC');
   }
+}
+
+function buildUserSearchText(input: UserInput): string {
+  return buildSearchText([input.nome, input.turma, input.contato]);
 }

@@ -11,9 +11,9 @@ function GenPage(navIndex, content, scripts, bodyExtra) {
     <html data-bs-theme="dark" lang="pt-br">
         <head>
             <title>Book DB</title>
-            <link rel="stylesheet" href="assets/bootstrap/css/bootstrap.min.css">
-            <link rel="stylesheet" href="assets/css/styles.css">
-            <link rel="stylesheet" href="assets/css_bootstrap-select.min.css">
+            <link rel="stylesheet" href="/assets/bootstrap/css/bootstrap.min.css">
+            <link rel="stylesheet" href="/assets/css/styles.css">
+            <link rel="stylesheet" href="/assets/css_bootstrap-select.min.css">
         </head>
         <body>
         ${alerts}
@@ -24,12 +24,12 @@ function GenPage(navIndex, content, scripts, bodyExtra) {
         ${genNav(navIndex, searchEnable)}
         </div>
         </div>
-        <script src="assets/js/jquery.min.js"></script>
-        <script src="assets/bootstrap/js/bootstrap.min.js"></script>
-        <script src="assets/bootstrap-select.min.js"></script>
-        <script src="functions/alerts.js"></script>
+        <script src="/assets/js/jquery.min.js"></script>
+        <script src="/assets/bootstrap/js/bootstrap.min.js"></script>
+        <script src="/assets/bootstrap-select.min.js"></script>
+        <script src="/functions/alerts.js"></script>
         ${scripts ?? ""}
-        <script src="functions/macros.js"></script>
+        <script src="/functions/macros.js"></script>
         </body>
         `
 }

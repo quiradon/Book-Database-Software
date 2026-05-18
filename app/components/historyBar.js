@@ -2,6 +2,7 @@ function page() {
     return `
 <div class="col d-flex py-4 px-4" style="overflow-y: scroll; height: 100vh;">
     <div class="flex-grow-1">
+        <div id="history-book-scope" class="history-book-scope d-none mb-3"></div>
         <form id="history-filter-form" class="toolbar-surface d-flex flex-wrap align-items-end gap-2 mb-3" method="get" action="/historico">
             <div class="filter-field">
                 <label class="form-label mb-1" for="history-search-input">Busca</label>

@@ -1,9 +1,12 @@
 const HISTORY_PAGE_SIZE = 60;
 const historyParams = new URLSearchParams(window.location.search);
+const historyBookPathMatch = window.location.pathname.match(/^\/historico\/livro\/(\d+)\/?$/);
 let historySearchTerm = historyParams.get('search') || '';
 let historyStatusFilter = historyParams.get('status') || '';
-const historyBookId = Number(historyParams.get('bookId')) || null;
+const historyBookId = Number(historyBookPathMatch?.[1] || historyParams.get('bookId')) || null;
+const historyBasePath = historyBookId ? `/historico/livro/${historyBookId}` : '/historico';
 let historyBookTitle = '';
+let historyBook = null;
 
 const historyList = document.getElementById('history-list-cards');
 const historySummary = document.getElementById('history-result-summary');
@@ -12,6 +15,7 @@ const historyStatusSelect = document.getElementById('history-status-filter');
 const historyFilterForm = document.getElementById('history-filter-form');
 const historyFilterState = document.getElementById('history-filter-state');
 const historyClearFilters = document.getElementById('history-clear-filters');
+const historyBookScope = document.getElementById('history-book-scope');
 
 let historyOffset = 0;
 let historyHasMore = true;
@@ -58,6 +62,47 @@ function formatDate(value) {
     return new Date(timestamp).toLocaleDateString();
 }
 
+function renderHistoryBookScope() {
+    if (!historyBookScope) {
+        return;
+    }
+
+    if (!historyBookId) {
+        historyBookScope.classList.add('d-none');
+        historyBookScope.innerHTML = '';
+        return;
+    }
+
+    const title = historyBookTitle || `Livro #${historyBookId}`;
+    const metaItems = [];
+
+    if (historyBook?.autor) {
+        metaItems.push(`Autor: ${escapeHtml(historyBook.autor)}`);
+    }
+    if (historyBook?.editora) {
+        metaItems.push(`Editora: ${escapeHtml(historyBook.editora)}`);
+    }
+    if (historyBook?.isbn) {
+        metaItems.push(`ISBN: ${escapeHtml(historyBook.isbn)}`);
+    }
+    if (historyBook?.total_exemplares) {
+        metaItems.push(`Exemplares: ${escapeHtml(historyBook.total_exemplares)}`);
+    }
+
+    historyBookScope.classList.remove('d-none');
+    historyBookScope.innerHTML = `
+        <div class="d-flex flex-wrap align-items-center gap-3">
+            <div class="flex-grow-1">
+                <div class="text-secondary small text-uppercase">Histórico do livro</div>
+                <div class="history-book-title fw-bold">${escapeHtml(title)}</div>
+                <div class="text-secondary">${metaItems.length > 0 ? metaItems.join(' | ') : 'Carregando dados do livro...'}</div>
+            </div>
+            <a class="btn btn-outline-primary" href="/?modal=${historyBookId}">Editar livro</a>
+            <a class="btn btn-outline-primary" href="/historico">Ver todos</a>
+        </div>
+    `;
+}
+
 function isHistorySearchActive() {
     return historySearchTerm.trim().length > 0;
 }
@@ -66,6 +111,9 @@ function syncHistoryFilterControls() {
     const searchActive = isHistorySearchActive();
     const bookScope = historyBookId ? `Histórico de ${historyBookTitle || `livro #${historyBookId}`}. ` : '';
 
+    if (historyFilterForm) {
+        historyFilterForm.action = historyBasePath;
+    }
     if (historySearchInput && historySearchInput.value !== historySearchTerm) {
         historySearchInput.value = historySearchTerm;
     }
@@ -79,8 +127,8 @@ function syncHistoryFilterControls() {
         return;
     }
 
-    if (historyClearFilters && historyBookId) {
-        historyClearFilters.href = `/historico?bookId=${historyBookId}`;
+    if (historyClearFilters) {
+        historyClearFilters.href = historyBasePath;
     }
 
     historyFilterState.classList.toggle('filter-state-active', searchActive || Boolean(historyStatusFilter) || Boolean(historyBookId));
@@ -100,9 +148,6 @@ function syncHistoryFilterControls() {
 function updateHistoryLocation() {
     const params = new URLSearchParams();
 
-    if (historyBookId) {
-        params.set('bookId', String(historyBookId));
-    }
     if (isHistorySearchActive()) {
         params.set('search', historySearchTerm.trim());
     } else if (historyStatusFilter) {
@@ -110,7 +155,7 @@ function updateHistoryLocation() {
     }
 
     const query = params.toString();
-    window.history.replaceState(null, '', `${window.location.pathname}${query ? `?${query}` : ''}`);
+    window.history.replaceState(null, '', `${historyBasePath}${query ? `?${query}` : ''}`);
 }
 
 function resetHistoryListState() {
@@ -188,6 +233,9 @@ function buildHistoryCard(item) {
     const returnedText = isReturned
         ? `Devolvido em ${formatDate(item.data_devolucao)}`
         : 'Ainda não devolvido';
+    const bookTitle = historyBookId || !item.livro_id
+        ? escapeHtml(item.livro_titulo)
+        : `<a class="link-body-emphasis text-decoration-none" href="/livros/${item.livro_id}">${escapeHtml(item.livro_titulo)}</a>`;
 
     return `
     <div class="card shadow-sm m-2">
@@ -196,7 +244,7 @@ function buildHistoryCard(item) {
                 <div class="row align-items-center g-3">
                     <div class="col-md-7">
                         <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
-                            <h5 class="fw-bold mb-0">${escapeHtml(item.livro_titulo)}</h5>
+                            <h5 class="fw-bold mb-0">${bookTitle}</h5>
                             ${badge}
                         </div>
                         <p class="mb-1">Leitor: <strong>${escapeHtml(item.leitor_nome)}</strong> | Turma: ${escapeHtml(item.leitor_turma)}</p>
@@ -205,7 +253,7 @@ function buildHistoryCard(item) {
                     </div>
                     <div class="col-md-3 text-secondary">${returnedText}</div>
                     <div class="col-md-2 d-flex justify-content-md-end">
-                        <a class="btn btn-outline-primary" href="/?modal=${item.livro_id}">Livro</a>
+                        <a class="btn btn-outline-primary" href="/livros/${item.livro_id}">Livro</a>
                     </div>
                 </div>
             </div>
@@ -283,14 +331,19 @@ function loadHistoryBookTitle() {
     return fetch(`/api/books/${historyBookId}`)
         .then(response => response.ok ? response.json() : null)
         .then(book => {
+            historyBook = book;
             historyBookTitle = book?.titulo || '';
+            renderHistoryBookScope();
             syncHistoryFilterControls();
         })
         .catch(() => {
+            historyBook = null;
             historyBookTitle = '';
+            renderHistoryBookScope();
         });
 }
 
+renderHistoryBookScope();
 syncHistoryFilterControls();
 updateHistoryLocation();
 loadHistoryBookTitle().then(() => loadLoanHistory(true));

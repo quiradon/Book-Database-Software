@@ -1,7 +1,7 @@
 import http from 'node:http';
 import path from 'node:path';
 import express from 'express';
-import { ensureConfig, loadConfig } from './config';
+import { ensureConfig, loadConfig, saveConfig } from './config';
 import { openDatabase } from './database/connection';
 import { BooksRepository } from './repositories/booksRepository';
 import { StatsRepository } from './repositories/statsRepository';
@@ -30,6 +30,7 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
   const users = new UsersRepository(db);
   const stats = new StatsRepository(db);
   const getConfig = () => loadConfig(options.projectRoot);
+  const setConfig = (input: Parameters<typeof saveConfig>[1]) => saveConfig(options.projectRoot, input);
   const library = new LibraryService(db, books, users, getConfig);
 
   const app = express();
@@ -38,6 +39,7 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
   app.use(express.json({ limit: '5mb' }));
   app.use('/assets', express.static(path.join(options.appRoot, 'assets'), { maxAge: '1h' }));
   app.use('/functions', express.static(path.join(options.appRoot, 'functions'), { maxAge: '1h' }));
+  app.use('/ui', express.static(path.join(options.appRoot, 'ui'), { maxAge: '1h' }));
 
   registerApiRoutes(app, {
     books,
@@ -45,6 +47,7 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
     stats,
     library,
     getConfig,
+    setConfig,
   });
   registerPageRoutes(app, { appRoot: options.appRoot });
   registerErrorHandler(app);
