@@ -52,6 +52,8 @@ export async function startServer(options: StartServerOptions): Promise<RunningS
   app.use('/ui', express.static(path.join(options.appRoot, 'ui'), { maxAge: '1h' }));
 
   registerApiRoutes(app, {
+    database: db,
+    projectRoot: options.projectRoot,
     books,
     users,
     stats,

@@ -87,7 +87,7 @@ if (hasSingleInstanceLock) {
 
     runningServer = await startServer({
       port,
-      projectRoot: getProjectRoot(),
+      projectRoot: app.getPath('userData'),
       appRoot: path.join(getProjectRoot(), 'app'),
     });
 

@@ -1020,7 +1020,7 @@ function BooksPage({
   const [historyTarget, setHistoryTarget] = useState<{ bookId: number; bookTitle: string; copyId?: number } | null>(null);
 
   const loadBooks = useCallback(
-    async (nextOffset = offset) => {
+    async (nextOffset: number) => {
       setLoading(true);
       try {
         const activeSearch = search.trim();
@@ -1040,7 +1040,7 @@ function BooksPage({
         setLoading(false);
       }
     },
-    [notify, offset, overdueMode, search, status, tag],
+    [notify, overdueMode, search, status, tag],
   );
 
   useEffect(() => {
@@ -1717,7 +1717,7 @@ function HistoryPage({ notify }: { notify: (tone: ToastState['tone'], text: stri
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  const load = useCallback(async (nextOffset = offset) => {
+  const load = useCallback(async (nextOffset: number) => {
     setLoading(true);
     try {
       const activeSearch = search.trim();
@@ -1733,7 +1733,7 @@ function HistoryPage({ notify }: { notify: (tone: ToastState['tone'], text: stri
     } finally {
       setLoading(false);
     }
-  }, [notify, offset, pathBookId, search, status]);
+  }, [notify, pathBookId, search, status]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => void load(0), 220);
@@ -1804,7 +1804,7 @@ function UsersPage({
   const [loading, setLoading] = useState(false);
   const [dialog, setDialog] = useState<{ mode: 'new' | 'edit'; user?: UserInfo } | null>(() => params.get('modal') === 'new' ? { mode: 'new' } : null);
 
-  const load = useCallback(async (nextOffset = offset) => {
+  const load = useCallback(async (nextOffset: number) => {
     setLoading(true);
     try {
       const activeSearch = search.trim();
@@ -1818,7 +1818,7 @@ function UsersPage({
     } finally {
       setLoading(false);
     }
-  }, [notify, offset, search, turma]);
+  }, [notify, search, turma]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => void load(0), 220);
@@ -2136,6 +2136,7 @@ function ConfigPage({
 }) {
   const [draft, setDraft] = useState<AppConfig | null>(null);
   const [saving, setSaving] = useState(false);
+  const [importingDatabase, setImportingDatabase] = useState(false);
 
   useEffect(() => {
     if (config) {
@@ -2161,6 +2162,35 @@ function ConfigPage({
       notify('success', `Importação: ${summary.created} criado(s), ${summary.updated} atualizado(s), ${summary.skipped} ignorado(s).`);
     } catch {
       notify('error', 'Não foi possível importar esse JSON.');
+    }
+  };
+
+  const importDatabase = async (file: File | null) => {
+    if (!file || importingDatabase) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      'Importar este banco vai substituir o acervo atual. Um backup do banco atual sera salvo antes da troca. Continuar?',
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setImportingDatabase(true);
+    try {
+      await apiFetch<{ backupPath: string | null; databasePath: string; sizeBytes: number }>('/api/database/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/vnd.sqlite3' },
+        body: await file.arrayBuffer(),
+      });
+      notify('success', 'Banco importado. Recarregando o acervo.');
+      window.setTimeout(() => window.location.assign('/'), 700);
+    } catch (error) {
+      notify('error', error instanceof Error ? error.message : 'Não foi possível importar esse banco.');
+    } finally {
+      setImportingDatabase(false);
     }
   };
 
@@ -2362,18 +2392,55 @@ function ConfigPage({
 
       <Card>
         <h2 className="mb-3 text-lg font-semibold">Importação e exportação</h2>
-        <div className="flex flex-wrap gap-2">
-          <LinkButton href="/export/books">Exportar livros</LinkButton>
-          <LinkButton href="/export/users">Exportar leitores</LinkButton>
-          <LinkButton href="/export/loans-history">Exportar histórico</LinkButton>
-          <label className="inline-flex h-9 cursor-pointer items-center justify-center rounded-md border border-blue-500/60 px-3 text-sm font-medium text-blue-100 hover:bg-blue-500/15">
-            Importar livros
-            <input className="hidden" type="file" accept="application/json,.json" onChange={(event) => void importJson('books', event.target.files?.[0] ?? null)} />
-          </label>
-          <label className="inline-flex h-9 cursor-pointer items-center justify-center rounded-md border border-blue-500/60 px-3 text-sm font-medium text-blue-100 hover:bg-blue-500/15">
-            Importar leitores
-            <input className="hidden" type="file" accept="application/json,.json" onChange={(event) => void importJson('users', event.target.files?.[0] ?? null)} />
-          </label>
+        <div className="grid gap-3">
+          <div className="flex flex-wrap gap-2">
+            <LinkButton href="/export/database" variant="primary"><FileDown size={16} />Exportar banco .db</LinkButton>
+            <label className="inline-flex h-9 cursor-pointer items-center justify-center gap-2 rounded-md border border-blue-500/60 px-3 text-sm font-medium text-blue-100 hover:bg-blue-500/15">
+              <PackagePlus size={16} />
+              {importingDatabase ? 'Importando banco' : 'Importar banco .db'}
+              <input
+                className="hidden"
+                type="file"
+                accept=".db,.sqlite,.sqlite3,application/vnd.sqlite3,application/x-sqlite3"
+                onChange={(event) => {
+                  const file = event.currentTarget.files?.[0] ?? null;
+                  event.currentTarget.value = '';
+                  void importDatabase(file);
+                }}
+              />
+            </label>
+          </div>
+          <div className="flex flex-wrap gap-2 border-t border-white/10 pt-3">
+            <LinkButton href="/export/books">Exportar livros</LinkButton>
+            <LinkButton href="/export/users">Exportar leitores</LinkButton>
+            <LinkButton href="/export/loans-history">Exportar histórico</LinkButton>
+            <label className="inline-flex h-9 cursor-pointer items-center justify-center rounded-md border border-blue-500/60 px-3 text-sm font-medium text-blue-100 hover:bg-blue-500/15">
+              Importar livros
+              <input
+                className="hidden"
+                type="file"
+                accept="application/json,.json"
+                onChange={(event) => {
+                  const file = event.currentTarget.files?.[0] ?? null;
+                  event.currentTarget.value = '';
+                  void importJson('books', file);
+                }}
+              />
+            </label>
+            <label className="inline-flex h-9 cursor-pointer items-center justify-center rounded-md border border-blue-500/60 px-3 text-sm font-medium text-blue-100 hover:bg-blue-500/15">
+              Importar leitores
+              <input
+                className="hidden"
+                type="file"
+                accept="application/json,.json"
+                onChange={(event) => {
+                  const file = event.currentTarget.files?.[0] ?? null;
+                  event.currentTarget.value = '';
+                  void importJson('users', file);
+                }}
+              />
+            </label>
+          </div>
         </div>
       </Card>
       <Card>

@@ -1,6 +1,6 @@
-import type { Express, NextFunction, Request, Response } from 'express';
-import { Router } from 'express';
+import express, { Router, type Express, type NextFunction, type Request, type Response } from 'express';
 import type { AppConfig } from '../config';
+import { DATABASE_FILE_NAME, importDatabaseBuffer, type SqliteConnection } from '../database/connection';
 import { AppError, isAppError } from '../errors';
 import type { BookInfo, BookLabelInfo, LoanHistoryStatus } from '../repositories/booksRepository';
 import { BooksRepository } from '../repositories/booksRepository';
@@ -13,6 +13,8 @@ import { LibraryService } from '../services/libraryService';
 import { MobileAccessService } from '../services/mobileAccessService';
 
 interface ApiDependencies {
+  database: SqliteConnection;
+  projectRoot: string;
   books: BooksRepository;
   users: UsersRepository;
   stats: StatsRepository;
@@ -253,6 +255,22 @@ export function registerApiRoutes(app: Express, dependencies: ApiDependencies): 
     }),
   );
 
+  router.post(
+    '/database/import',
+    express.raw({ type: '*/*', limit: '500mb' }),
+    asyncRoute(async (request, response) => {
+      if (!Buffer.isBuffer(request.body)) {
+        throw new AppError(400, 'Envie um arquivo .db valido.');
+      }
+
+      try {
+        response.json(await importDatabaseBuffer(dependencies.database, dependencies.projectRoot, request.body));
+      } catch (error) {
+        throw new AppError(400, error instanceof Error ? error.message : 'Nao foi possivel importar esse banco.');
+      }
+    }),
+  );
+
   router.get('/config', (_request, response) => {
     response.json(dependencies.getConfig());
   });
@@ -424,6 +442,26 @@ export function registerApiRoutes(app: Express, dependencies: ApiDependencies): 
     asyncRoute(async (_request, response) => {
       response.setHeader('Content-Disposition', 'attachment; filename="historico-emprestimos.json"');
       response.json(await dependencies.books.exportLoanHistory());
+    }),
+  );
+
+  app.get(
+    '/export/database',
+    asyncRoute(async (_request, response) => {
+      await dependencies.database.checkpoint();
+      response.setHeader('Content-Type', 'application/vnd.sqlite3');
+      response.setHeader('Content-Disposition', `attachment; filename="${DATABASE_FILE_NAME}"`);
+
+      await new Promise<void>((resolve, reject) => {
+        response.sendFile(dependencies.database.filePath, (error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+
+          resolve();
+        });
+      });
     }),
   );
 
