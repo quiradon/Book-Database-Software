@@ -60,6 +60,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: out/make/**
+          path: out/make/**/*
           if-no-files-found: error
           retention-days: 14
